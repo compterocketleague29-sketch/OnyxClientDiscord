@@ -1,0 +1,41 @@
+{
+  "catalog_type": "local-preview-examples",
+  "categories": {
+    "Carrosseries": [
+      {"id": "demo:body:octane", "name": "Octane", "color": "#A855F7", "description": "Exemple de carrosserie"},
+      {"id": "demo:body:fennec", "name": "Fennec", "color": "#60A5FA", "description": "Exemple de carrosserie"},
+      {"id": "demo:body:dominus", "name": "Dominus", "color": "#F87171", "description": "Exemple de carrosserie"}
+    ],
+    "Stickers": [
+      {"id": "demo:decal:interstellar", "name": "Interstellar", "color": "#A855F7", "description": "Exemple de sticker"},
+      {"id": "demo:decal:abtruse", "name": "Abtruse", "color": "#60A5FA", "description": "Exemple de sticker"}
+    ],
+    "Roues": [
+      {"id": "demo:wheels:oem", "name": "OEM", "color": "#A855F7", "description": "Exemple de roues"},
+      {"id": "demo:wheels:cristiano", "name": "Cristiano", "color": "#F5C451", "description": "Exemple de roues"},
+      {"id": "demo:wheels:dieci", "name": "Dieci", "color": "#42E6A4", "description": "Exemple de roues"}
+    ],
+    "Boosts": [
+      {"id": "demo:boost:alpha", "name": "Alpha Boost", "color": "#F5C451", "description": "Exemple de boost"},
+      {"id": "demo:boost:standard", "name": "Standard", "color": "#60A5FA", "description": "Exemple de boost"}
+    ],
+    "Explosions de but": [
+      {"id": "demo:goal:dueling-dragons", "name": "Dueling Dragons", "color": "#F87171", "description": "Exemple d'explosion"},
+      {"id": "demo:goal:solar-flare", "name": "Solar Flare", "color": "#F5C451", "description": "Exemple d'explosion"}
+    ],
+    "Traînées": [
+      {"id": "demo:trail:lightspeed", "name": "Lightspeed", "color": "#60A5FA", "description": "Exemple de traînée"},
+      {"id": "demo:trail:zigzag", "name": "Zigzag", "color": "#42E6A4", "description": "Exemple de traînée"}
+    ],
+    "Peintures et couleurs": [
+      {"id": "demo:paint:onyx-violet", "name": "Violet ONYX", "color": "#A855F7", "description": "Couleur d'aperçu"},
+      {"id": "demo:paint:ice-blue", "name": "Bleu glace", "color": "#60A5FA", "description": "Couleur d'aperçu"},
+      {"id": "demo:paint:solar-gold", "name": "Or solaire", "color": "#F5C451", "description": "Couleur d'aperçu"},
+      {"id": "demo:paint:ember-red", "name": "Rouge braise", "color": "#F87171", "description": "Couleur d'aperçu"}
+    ],
+    "Finitions": [
+      {"id": "demo:finish:anodized", "name": "Anodisé", "color": "#C084FC", "description": "Exemple de finition"},
+      {"id": "demo:finish:pearlescent", "name": "Nacré", "color": "#E9D5FF", "description": "Exemple de finition"}
+    ]
+  }
+}
