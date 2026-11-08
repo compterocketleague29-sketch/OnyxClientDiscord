@@ -766,25 +766,89 @@ async def register_discord_features(bot):
 
     @bot.tree.command(name='aide', description='Afficher les commandes Onyx Client')
     async def aide(interaction: discord.Interaction):
-        embed = discord.Embed(
-            title='Aide Onyx Client',
-            description='Commandes rapides pour ta licence et le client.',
-            color=discord.Color.blurple(),
-        )
-        embed.add_field(
-            name='Licence et client',
-            value=(
-                '`/acheter` acheter une licence • `/lier-cle` associer une clé\n'
-                '`/mes-licences` consulter tes licences • `/telecharger` obtenir le client'
+        pages = [
+            (
+                'Licences et client',
+                (
+                    '`/aide` — afficher cette liste complète des commandes.\n'
+                    '`/acheter <offre>` — acheter une licence parmi les offres disponibles. '
+                    'Le lien de paiement est envoyé en privé.\n'
+                    '`/lier-cle <cle>` — associer à ton compte une clé existante.\n'
+                    '`/mes-licences` — consulter en privé tes licences actives et tes clés.\n'
+                    '`/telecharger` — obtenir le bouton de téléchargement si tu as une licence active.\n\n'
+                    '**Support**\n'
+                    '`/ticket-actions` — afficher les boutons dans un ticket ouvert (propriétaire ou staff).\n'
+                    '`/ticket-add <membre>` — ajouter un membre à un ticket (propriétaire ou staff).\n'
+                    '`/ticket-transcript` — recevoir en privé le transcript d’un ticket (propriétaire ou staff).\n'
+                    '`/ticket-close` — fermer un ticket et archiver son transcript.\n\n'
+                    'Pour ouvrir un ticket, utilise le panneau de support et choisis une catégorie.'
+                ),
             ),
-            inline=False,
-        )
-        embed.add_field(
-            name='Support',
-            value='Utilise le panneau de support du serveur pour ouvrir un ticket privé.',
-            inline=False,
-        )
-        await interaction.response.send_message(embed=embed)
+            (
+                'Administration et staff',
+                (
+                    '`/ticket-panel [salon]` — publier le panneau de support (staff).\n'
+                    '`/annonce-bilingue` — saisir une annonce en français; le bot la traduit en anglais et publie les deux versions (staff).\n'
+                    '`/giveaway <prix> <duree_heures> [gagnants] [salon]` — lancer un tirage au sort (staff).\n'
+                    '`/admin-creer-cle <membre> <offre>` — créer une licence pour un membre (administrateur; résultat privé).\n'
+                    '`/admin-revoquer-cle <cle>` — révoquer une licence (administrateur; résultat privé).\n'
+                    '`/admin-licences <membre>` — consulter les licences d’un membre (administrateur; résultat privé).\n'
+                    '`/admin-lister-cles` — publier l’inventaire avec clés masquées; l’administrateur reçoit aussi la liste complète et les actions privées.'
+                ),
+            ),
+            (
+                'Modération',
+                (
+                    '`/clear <nombre> [salon]` — supprimer de 1 à 100 messages; permission **Gérer les messages**.\n'
+                    '`/ban <membre> [raison]` — bannir un membre; permission **Bannir des membres**.\n'
+                    '`/unban <identifiant> [raison]` — débannir un utilisateur; permission **Bannir des membres**.\n'
+                    '`/timeout <membre> <duree_minutes> [raison]` — appliquer un timeout de 1 minute à 28 jours; permission **Modérer des membres**.\n'
+                    '`/untimeout <membre> [raison]` — retirer le timeout; permission **Modérer des membres**.\n\n'
+                    'Les rôles du bot doivent être assez élevés pour effectuer les actions de modération.'
+                ),
+            ),
+        ]
+
+        class HelpView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=300)
+                self.page = 0
+                self.update_buttons()
+
+            def update_buttons(self):
+                self.previous.disabled = self.page == 0
+                self.next.disabled = self.page == len(pages) - 1
+
+            def make_embed(self):
+                title, description = pages[self.page]
+                embed = discord.Embed(
+                    title=f'Aide Onyx Client — {title}',
+                    description=description,
+                    color=discord.Color.blurple(),
+                )
+                embed.set_footer(text=f'Page {self.page + 1}/{len(pages)} • Commandes slash du bot')
+                return embed
+
+            @discord.ui.button(label='Précédent', style=discord.ButtonStyle.secondary)
+            async def previous(self, component_interaction, button):
+                self.page -= 1
+                self.update_buttons()
+                await component_interaction.response.edit_message(
+                    embed=self.make_embed(),
+                    view=self,
+                )
+
+            @discord.ui.button(label='Suivant', style=discord.ButtonStyle.secondary)
+            async def next(self, component_interaction, button):
+                self.page += 1
+                self.update_buttons()
+                await component_interaction.response.edit_message(
+                    embed=self.make_embed(),
+                    view=self,
+                )
+
+        view = HelpView()
+        await interaction.response.send_message(embed=view.make_embed(), view=view)
 
     @bot.tree.command(
         name='annonce-bilingue',

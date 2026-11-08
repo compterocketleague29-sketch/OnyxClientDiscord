@@ -43,7 +43,7 @@ Le bot reste connecté tant que son service Railway est déployé et actif. Rail
 
 ## Commandes Discord
 
-- `/aide` : présente publiquement les commandes de licence, de téléchargement et de support.
+- `/aide` : présente publiquement, sur trois pages navigables, toutes les commandes slash avec leur usage et les permissions ou rôles requis.
 - `/acheter` : crée un paiement Stripe pour l'une des cinq offres : 3 jours (4,99 €, 1 PC), 1 semaine (7,99 €, 1 PC), 1 mois (14,99 €, 1 PC), 3 mois (29,99 €, 1 PC) ou à vie (59,99 €, 2 PC). La clé est créée après confirmation du paiement et récupérable avec `/mes-licences`.
 - `/mes-licences` : affiche en privé les licences actives et leurs clés.
 - `/lier-cle` : associe à Discord une clé existante, par exemple achetée sur le site.
