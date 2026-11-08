@@ -12,6 +12,8 @@
 **/out/
 **/.vercel/
 *.tsbuildinfo
+client/build/
+client/dist/
 
 # Local configuration and logs
 .env
