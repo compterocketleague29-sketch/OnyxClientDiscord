@@ -38,7 +38,7 @@ PLANS = {
 def connect():
     if not DATABASE_URL:
         raise RuntimeError('La variable DATABASE_URL est obligatoire.')
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=5)
 
 
 def initialize_database():
@@ -210,6 +210,8 @@ def create_admin_license(plan_id, discord_user_id):
 
 def revoke_license(key):
     with connect() as con:
+        con.execute("SET LOCAL lock_timeout = '3s'")
+        con.execute("SET LOCAL statement_timeout = '5s'")
         result = con.execute(
             '''UPDATE license_keys SET "status"='revoked'
                WHERE "key"=%s AND "status"='active' ''',
@@ -242,6 +244,8 @@ def delete_license(key):
     normalized_key = key.strip().upper()
     with connect() as con:
         with con.transaction():
+            con.execute("SET LOCAL lock_timeout = '3s'")
+            con.execute("SET LOCAL statement_timeout = '5s'")
             license_row = con.execute(
                 '''SELECT "stripeSessionId", "source" FROM license_keys
                    WHERE "key"=%s FOR UPDATE''',

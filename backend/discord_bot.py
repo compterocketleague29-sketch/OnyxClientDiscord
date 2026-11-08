@@ -468,7 +468,15 @@ async def admin_lister_cles(interaction: discord.Interaction):
                     ephemeral=True,
                 )
                 return
-            await confirm_interaction.response.defer(ephemeral=True, thinking=True)
+            pending_message = (
+                'Révocation en cours…'
+                if action == 'revoke'
+                else 'Suppression en cours…'
+            )
+            await confirm_interaction.response.edit_message(
+                content=pending_message,
+                view=None,
+            )
             try:
                 changed = await asyncio.to_thread(
                     revoke_license if action == 'revoke' else delete_license,
@@ -494,6 +502,15 @@ async def admin_lister_cles(interaction: discord.Interaction):
                         row['status'] = 'revoked'
                     break
 
+            completed_action = (
+                'a été révoquée' if action == 'revoke' else 'a été supprimée définitivement'
+            )
+            result = (
+                f'La clé `{key}` {completed_action}.'
+                if changed
+                else 'Cette clé n’existe plus ou n’est plus active.'
+            )
+            await confirm_interaction.edit_original_response(content=result)
             list_view.selected_key = None
             if licenses:
                 await list_view.message.edit(
@@ -506,18 +523,6 @@ async def admin_lister_cles(interaction: discord.Interaction):
                     embed=None,
                     view=None,
                 )
-            completed_action = (
-                'a été révoquée' if action == 'revoke' else 'a été supprimée définitivement'
-            )
-            result = (
-                f'La clé `{key}` {completed_action}.'
-                if changed
-                else 'Cette clé n’existe plus ou n’est plus active.'
-            )
-            await confirm_interaction.edit_original_response(
-                content=result,
-                view=None,
-            )
 
         async def cancel(cancel_interaction):
             await cancel_interaction.response.edit_message(
