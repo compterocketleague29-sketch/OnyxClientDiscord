@@ -1,13 +1,47 @@
+import json
 import unittest
+from io import BytesIO
 from types import SimpleNamespace
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 from discord_features import (
     TICKET_CATEGORY_CHANNEL_IDS,
     TICKET_PING_ROLE_ID,
+    TranslationServiceError,
     ticket_delete_deadline,
     ticket_is_closed,
     ticket_owner,
+    translate_french_to_english,
 )
+
+
+class TranslationTests(unittest.TestCase):
+    @patch('discord_features.urlopen')
+    def test_falls_back_to_mymemory_when_libretranslate_rejects_request(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            HTTPError('https://translate.example', 403, 'Forbidden', {}, None),
+            BytesIO(json.dumps({
+                'responseStatus': 200,
+                'responseData': {'translatedText': 'Hello &amp; welcome'},
+            }).encode('utf-8')),
+        ]
+
+        self.assertEqual(translate_french_to_english('Bonjour et bienvenue'), 'Hello & welcome')
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch('discord_features.urlopen')
+    def test_reports_both_translation_service_failures(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            HTTPError('https://translate.example', 403, 'Forbidden', {}, None),
+            HTTPError('https://mymemory.example', 503, 'Unavailable', {}, None),
+        ]
+
+        with self.assertRaises(TranslationServiceError) as error:
+            translate_french_to_english('Bonjour')
+
+        self.assertIn('HTTP 403', str(error.exception))
+        self.assertIn('HTTP 503', str(error.exception))
 
 
 class TicketMetadataTests(unittest.TestCase):

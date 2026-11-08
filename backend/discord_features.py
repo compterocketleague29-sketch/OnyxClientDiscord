@@ -7,6 +7,8 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
+from urllib.parse import urlencode
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -42,10 +44,10 @@ class TranslationServiceError(RuntimeError):
     pass
 
 
-def translate_french_to_english(text):
-    endpoint = os.environ.get(
-        'LIBRETRANSLATE_URL',
-        'https://libretranslate.com/translate',
+def translate_with_libretranslate(text):
+    endpoint = (
+        os.environ.get('LIBRETRANSLATE_URL')
+        or 'https://libretranslate.com/translate'
     )
     payload = {
         'q': text,
@@ -63,7 +65,7 @@ def translate_french_to_english(text):
         method='POST',
     )
     try:
-        with urlopen(request, timeout=15) as response:
+        with urlopen(request, timeout=8) as response:
             result = json.loads(response.read().decode('utf-8'))
     except HTTPError as error:
         raise TranslationServiceError(
@@ -78,6 +80,55 @@ def translate_french_to_english(text):
     if not isinstance(translated, str) or not translated.strip():
         raise TranslationServiceError('Aucune traduction n’a été renvoyée.')
     return translated.strip()
+
+
+def translate_with_mymemory(text):
+    query = urlencode({'q': text, 'langpair': 'fr|en'})
+    request = Request(
+        f'https://api.mymemory.translated.net/get?{query}',
+        headers={'Accept': 'application/json'},
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            result = json.loads(response.read().decode('utf-8'))
+    except HTTPError as error:
+        raise TranslationServiceError(
+            f'Le service de secours a répondu HTTP {error.code}.'
+        ) from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise TranslationServiceError('Le service de secours est inaccessible.') from error
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise TranslationServiceError('La réponse du service de secours est invalide.') from error
+
+    response_data = result.get('responseData') if isinstance(result, dict) else None
+    translated = response_data.get('translatedText') if isinstance(response_data, dict) else None
+    response_status = result.get('responseStatus') if isinstance(result, dict) else None
+    if response_status != 200 or not isinstance(translated, str) or not translated.strip():
+        error_message = (
+            result.get('responseDetails', 'Aucune traduction n’a été renvoyée.')
+            if isinstance(result, dict)
+            else 'Réponse invalide.'
+        )
+        raise TranslationServiceError(f'Le service de secours a échoué : {error_message}')
+    return html.unescape(translated).strip()
+
+
+def translate_french_to_english(text):
+    libretranslate_error = None
+    try:
+        return translate_with_libretranslate(text)
+    except TranslationServiceError as error:
+        libretranslate_error = error
+        logger.warning(
+            'LibreTranslate indisponible (%s); tentative via MyMemory.',
+            libretranslate_error,
+        )
+    try:
+        return translate_with_mymemory(text)
+    except TranslationServiceError as mymemory_error:
+        raise TranslationServiceError(
+            f'LibreTranslate : {libretranslate_error} MyMemory : {mymemory_error}'
+        ) from mymemory_error
 
 
 def configured_ids(variable_name):
@@ -769,10 +820,10 @@ async def register_discord_features(bot):
                         translate_french_to_english,
                         self.french_text.value,
                     )
-                except TranslationServiceError:
+                except TranslationServiceError as error:
                     logger.exception('Échec de la traduction d’une annonce bilingue.')
                     await modal_interaction.followup.send(
-                        'La traduction automatique a échoué. Réessaie plus tard ou contacte un administrateur.',
+                        f'La traduction automatique a échoué : {error}'[:1500],
                         ephemeral=True,
                     )
                     return
