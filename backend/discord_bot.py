@@ -266,8 +266,61 @@ async def admin_lister_cles(interaction: discord.Interaction):
         return
     licenses = await asyncio.to_thread(get_all_licenses)
     if not licenses:
-        await interaction.response.send_message('Aucune clé de licence trouvée.', ephemeral=True)
+        await interaction.response.send_message('Aucune clé de licence trouvée.')
         return
+
+    class PublicLicenseListView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+            self.page = 0
+            self.page_size = 10
+            self.update_buttons()
+
+        def update_buttons(self):
+            self.previous.disabled = self.page == 0
+            self.next.disabled = (self.page + 1) * self.page_size >= len(licenses)
+
+        def display_page(self):
+            start = self.page * self.page_size
+            rows = licenses[start:start + self.page_size]
+            lines = []
+            for row in rows:
+                plan = PLANS.get(row['plan'], {}).get('name', row['plan'])
+                expires = row['expiresAt']
+                expiry = expires.replace(tzinfo=timezone.utc).strftime('%d/%m/%Y') if expires else '—'
+                key_suffix = row['key'][-4:]
+                lines.append(
+                    f'`****{key_suffix}` · **{plan}** · {row["status"]} · '
+                    f'{"Associée" if row["discordUserId"] else "Non associée"} · '
+                    f'expiration : {expiry}'
+                )
+            embed = discord.Embed(
+                title='Inventaire public des licences',
+                description='\n'.join(lines),
+                color=discord.Color.blurple(),
+            )
+            embed.set_footer(
+                text=f'{start + 1}–{start + len(rows)} sur {len(licenses)} clés • clés masquées'
+            )
+            return embed
+
+        @discord.ui.button(label='Précédent', style=discord.ButtonStyle.secondary)
+        async def previous(self, component_interaction, button):
+            self.page -= 1
+            self.update_buttons()
+            await component_interaction.response.edit_message(
+                embed=self.display_page(),
+                view=self,
+            )
+
+        @discord.ui.button(label='Suivant', style=discord.ButtonStyle.secondary)
+        async def next(self, component_interaction, button):
+            self.page += 1
+            self.update_buttons()
+            await component_interaction.response.edit_message(
+                embed=self.display_page(),
+                view=self,
+            )
 
     class LicenseListView(discord.ui.View):
         def __init__(self, owner_id):
@@ -415,10 +468,22 @@ async def admin_lister_cles(interaction: discord.Interaction):
                     ephemeral=True,
                 )
                 return
-            changed = await asyncio.to_thread(
-                revoke_license if action == 'revoke' else delete_license,
-                key,
-            )
+            await confirm_interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                changed = await asyncio.to_thread(
+                    revoke_license if action == 'revoke' else delete_license,
+                    key,
+                )
+            except Exception:
+                logger.exception('Échec de l’action %s sur une licence.', action)
+                await confirm_interaction.edit_original_response(
+                    content=(
+                        'Une erreur est survenue pendant le traitement. '
+                        'Vérifie la liste avant de réessayer.'
+                    ),
+                    view=None,
+                )
+                return
             for index, row in enumerate(licenses):
                 if row['key'] == key:
                     if action == 'delete':
@@ -449,7 +514,7 @@ async def admin_lister_cles(interaction: discord.Interaction):
                 if changed
                 else 'Cette clé n’existe plus ou n’est plus active.'
             )
-            await confirm_interaction.response.edit_message(
+            await confirm_interaction.edit_original_response(
                 content=result,
                 view=None,
             )
@@ -480,12 +545,17 @@ async def admin_lister_cles(interaction: discord.Interaction):
         )
 
     view = LicenseListView(interaction.user.id)
+    public_view = PublicLicenseListView()
     await interaction.response.send_message(
+        embed=public_view.display_page(),
+        view=public_view,
+    )
+    view.message = await interaction.followup.send(
         embed=view.display_page(),
         view=view,
         ephemeral=True,
+        wait=True,
     )
-    view.message = await interaction.original_response()
 
 
 def main():
