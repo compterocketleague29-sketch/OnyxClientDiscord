@@ -71,6 +71,25 @@ def license_summary(license_row):
     return f'**{plan}** — `{license_row["key"]}` — expiration : {expiry}'
 
 
+async def send_license_key_dm(member, plan_name, key):
+    message = (
+        'Merci de faire confiance à Onyx Client et bienvenue ! 🎉\n\n'
+        f'Ta licence **{plan_name}** est prête. Voici ta clé d’activation :\n'
+        f'||{key}||\n\n'
+        'Garde-la précieusement et ne la partage pas. Tu peux retrouver tes licences '
+        'avec `/mes-licences` et télécharger le client avec `/telecharger`.'
+    )
+    try:
+        await member.send(message)
+    except discord.Forbidden:
+        logger.warning('Impossible d’envoyer la clé en message privé à %s : MP refusés.', member.id)
+        return False
+    except discord.HTTPException:
+        logger.exception('Échec de l’envoi de la clé en message privé à %s.', member.id)
+        return False
+    return True
+
+
 class OnyxDiscordBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
@@ -258,11 +277,20 @@ async def admin_creer_cle(
     if not is_admin(interaction):
         await interaction.response.send_message('Commande réservée aux administrateurs.', ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=True)
     key = await asyncio.to_thread(create_admin_license, offre.value, str(membre.id))
-    await interaction.response.send_message(
-        f'Licence **{PLANS[offre.value]["name"]}** créée pour {membre.mention} : `{key}`',
-        ephemeral=True,
+    dm_sent = await send_license_key_dm(membre, PLANS[offre.value]['name'], key)
+    message = (
+        f'Licence **{PLANS[offre.value]["name"]}** créée pour {membre.mention} : ||{key}||'
     )
+    if dm_sent:
+        message += '\nUn message privé contenant la clé lui a été envoyé.'
+    else:
+        message += (
+            '\n⚠️ Impossible de lui envoyer un message privé. La clé reste affichée ici ; '
+            'vérifie que le membre autorise les MP du serveur.'
+        )
+    await interaction.edit_original_response(content=message)
 
 
 @bot.tree.command(name='admin-revoquer-cle', description='Révoquer une licence')
