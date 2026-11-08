@@ -44,15 +44,17 @@ Le bot reste connecté tant que son service Railway est déployé et actif. Rail
 ## Commandes Discord
 
 - `/aide` : présente les commandes de licence, de téléchargement et de support.
-- `/acheter` : crée un paiement Stripe pour l'une des trois offres. La clé est créée après confirmation du paiement et récupérable avec `/mes-licences`.
+- `/acheter` : crée un paiement Stripe pour l'une des cinq offres : 3 jours (4,99 €, 1 PC), 1 semaine (7,99 €, 1 PC), 1 mois (14,99 €, 1 PC), 3 mois (29,99 €, 1 PC) ou à vie (59,99 €, 2 PC). La clé est créée après confirmation du paiement et récupérable avec `/mes-licences`.
 - `/mes-licences` : affiche en privé les licences actives liées au compte.
 - `/lier-cle` : associe à Discord une clé existante, par exemple achetée sur le site.
-- `/telecharger` : fournit le lien de téléchargement aux membres ayant une licence active.
-- `/admin-creer-cle`, `/admin-revoquer-cle` et `/admin-licences` : commandes réservées aux identifiants utilisateur ou rôles configurés.
-- `/ticket-panel` : publie le panneau pour ouvrir un ticket privé. Le salon de tickets peut être choisi avec `TICKET_CATEGORY_ID`.
+- `/telecharger` : affiche un bouton « Télécharger le launcher » aux membres ayant une licence active, sans montrer l'URL.
+- `/admin-creer-cle`, `/admin-revoquer-cle`, `/admin-licences` et `/admin-lister-cles` : commandes réservées aux administrateurs; l'inventaire complet des clés est privé et paginé.
+- `/ticket-panel` : publie le menu de création de tickets privés (aide, paiement, clé, launcher ou autre). Le salon de tickets peut être choisi avec `TICKET_CATEGORY_ID`.
 - `/ticket-close`, `/ticket-add` et `/ticket-transcript` : ferment et archivent un ticket, ajoutent un membre ou fournissent son transcript HTML. Si `TICKET_LOG_CHANNEL_ID` est défini, le transcript est aussi envoyé dans ce salon.
 - `/clear` : supprime de 1 à 100 messages dans un salon; permission Discord **Gérer les messages** requise.
 - `/giveaway` : lance un tirage au sort avec bouton de participation et tirage automatique. Les participations et échéances sont conservées dans PostgreSQL pour survivre aux redémarrages.
+
+Après le déploiement des mises à jour Discord, utilise `/ticket-panel` à nouveau pour remplacer l'ancien panneau par le menu de catégories.
 
 Le lien du `.exe` peut circuler, mais son utilisation reste protégée par la validation de licence auprès de l'API.
 

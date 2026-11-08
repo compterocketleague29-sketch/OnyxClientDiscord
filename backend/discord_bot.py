@@ -17,6 +17,7 @@ from license_store import (
     claim_license,
     create_admin_license,
     get_active_licenses,
+    get_all_licenses,
     get_user_licenses,
     initialize_database,
     revoke_license,
@@ -39,6 +40,11 @@ DOWNLOAD_URL = os.environ.get(
     'DOWNLOAD_URL',
     'https://github.com/compterocketleague29-sketch/onyx-client-releases/releases/download/v1.0/Onyx-Client.exe',
 )
+
+
+def format_euros(amount_cents):
+    euros, cents = divmod(amount_cents, 100)
+    return f'{euros},{cents:02d} €'
 
 
 def is_admin(interaction):
@@ -86,6 +92,16 @@ class OnyxDiscordBot(discord.Client):
 
 bot = OnyxDiscordBot()
 plan_choices = [
+    app_commands.Choice(
+        name=(
+            f'{plan["name"]} · {format_euros(plan["price_cents"])} · '
+            f'{plan["max_devices"]} PC'
+        ),
+        value=plan_id,
+    )
+    for plan_id, plan in PLANS.items()
+]
+admin_plan_choices = [
     app_commands.Choice(name=plan['name'], value=plan_id)
     for plan_id, plan in PLANS.items()
 ]
@@ -135,7 +151,7 @@ async def acheter(interaction: discord.Interaction, offre: app_commands.Choice[s
         return
 
     await interaction.response.send_message(
-        f'Paiement sécurisé pour **{plan["name"]}** ({plan["price_cents"] / 100:.2f} €) :\n'
+        f'Paiement sécurisé pour **{plan["name"]}** ({format_euros(plan["price_cents"])}):\n'
         f'{checkout.url}\n'
         'Après le paiement, récupère ta clé avec `/mes-licences`.',
         ephemeral=True,
@@ -181,15 +197,25 @@ async def telecharger(interaction: discord.Interaction):
             ephemeral=True,
         )
         return
+    view = discord.ui.View()
+    view.add_item(
+        discord.ui.Button(
+            label='Télécharger le launcher',
+            style=discord.ButtonStyle.link,
+            url=DOWNLOAD_URL,
+            emoji='⬇️',
+        )
+    )
     await interaction.response.send_message(
-        f'Téléchargement d’Onyx Client : {DOWNLOAD_URL}',
+        'Ta licence est active. Clique sur le bouton ci-dessous pour télécharger le launcher.',
+        view=view,
         ephemeral=True,
     )
 
 
 @bot.tree.command(name='admin-creer-cle', description='Créer une licence pour un membre')
 @app_commands.guild_only()
-@app_commands.choices(offre=plan_choices)
+@app_commands.choices(offre=admin_plan_choices)
 async def admin_creer_cle(
     interaction: discord.Interaction,
     membre: discord.User,
@@ -231,6 +257,77 @@ async def admin_licences(interaction: discord.Interaction, membre: discord.User)
         for row in licenses
     ]
     await interaction.response.send_message('\n'.join(lines), ephemeral=True)
+
+
+@bot.tree.command(name='admin-lister-cles', description='Lister toutes les clés de licence')
+@app_commands.guild_only()
+async def admin_lister_cles(interaction: discord.Interaction):
+    if not is_admin(interaction):
+        await interaction.response.send_message('Commande réservée aux administrateurs.', ephemeral=True)
+        return
+    licenses = await asyncio.to_thread(get_all_licenses)
+    if not licenses:
+        await interaction.response.send_message('Aucune clé de licence trouvée.', ephemeral=True)
+        return
+
+    class LicenseListView(discord.ui.View):
+        def __init__(self, owner_id):
+            super().__init__(timeout=300)
+            self.owner_id = owner_id
+            self.page = 0
+            self.page_size = 10
+            self.update_buttons()
+
+        def update_buttons(self):
+            self.previous.disabled = self.page == 0
+            self.next.disabled = (self.page + 1) * self.page_size >= len(licenses)
+
+        def make_embed(self):
+            start = self.page * self.page_size
+            rows = licenses[start:start + self.page_size]
+            lines = []
+            for row in rows:
+                plan = PLANS.get(row['plan'], {}).get('name', row['plan'])
+                expires = row['expiresAt']
+                expiry = expires.replace(tzinfo=timezone.utc).strftime('%d/%m/%Y') if expires else '—'
+                owner = f"<@{row['discordUserId']}>" if row['discordUserId'] else 'Non associée'
+                lines.append(
+                    f'`{row["key"]}` · **{plan}** · {row["status"]} · '
+                    f'{owner} · expiration : {expiry}'
+                )
+            embed = discord.Embed(
+                title='Inventaire des licences',
+                description='\n'.join(lines),
+                color=discord.Color.blurple(),
+            )
+            embed.set_footer(
+                text=f'{start + 1}–{start + len(rows)} sur {len(licenses)} clés • visible uniquement par toi'
+            )
+            return embed
+
+        async def interaction_check(self, component_interaction):
+            if component_interaction.user.id != self.owner_id:
+                await component_interaction.response.send_message(
+                    'Cette liste privée appartient à un autre administrateur.',
+                    ephemeral=True,
+                )
+                return False
+            return True
+
+        @discord.ui.button(label='Précédent', style=discord.ButtonStyle.secondary)
+        async def previous(self, component_interaction, button):
+            self.page -= 1
+            self.update_buttons()
+            await component_interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+        @discord.ui.button(label='Suivant', style=discord.ButtonStyle.secondary)
+        async def next(self, component_interaction, button):
+            self.page += 1
+            self.update_buttons()
+            await component_interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+    view = LicenseListView(interaction.user.id)
+    await interaction.response.send_message(embed=view.make_embed(), view=view, ephemeral=True)
 
 
 def main():

@@ -9,9 +9,29 @@ from psycopg.rows import dict_row
 DATABASE_URL = os.environ.get('DATABASE_URL')
 ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 PLANS = {
-    'semaine': {'days': 7, 'max_devices': 1, 'price_cents': 499, 'name': '1 semaine'},
-    'mois': {'days': 30, 'max_devices': 1, 'price_cents': 999, 'name': '1 mois'},
-    'vie': {'days': None, 'max_devices': 2, 'price_cents': 2999, 'name': 'À vie'},
+    '3jours': {'days': 3, 'max_devices': 1, 'price_cents': 499, 'name': '3 jours'},
+    'semaine': {
+        'days': 7,
+        'max_devices': 1,
+        'price_cents': 799,
+        'legacy_price_cents': (499,),
+        'name': '1 semaine',
+    },
+    'mois': {
+        'days': 30,
+        'max_devices': 1,
+        'price_cents': 1499,
+        'legacy_price_cents': (999,),
+        'name': '1 mois',
+    },
+    '3mois': {'days': 90, 'max_devices': 1, 'price_cents': 2999, 'name': '3 mois'},
+    'vie': {
+        'days': None,
+        'max_devices': 2,
+        'price_cents': 5999,
+        'legacy_price_cents': (2999,),
+        'name': 'À vie',
+    },
 }
 
 
@@ -69,7 +89,8 @@ def validate_discord_checkout(session):
         raise ValueError('Offre inconnue.')
     if session.get('payment_status') != 'paid':
         raise ValueError('Le paiement Stripe n’est pas confirmé.')
-    if session.get('currency') != 'eur' or session.get('amount_total') != plan['price_cents']:
+    valid_prices = (plan['price_cents'], *plan.get('legacy_price_cents', ()))
+    if session.get('currency') != 'eur' or session.get('amount_total') not in valid_prices:
         raise ValueError('Le montant du paiement ne correspond pas à l’offre.')
     if not session.get('id'):
         raise ValueError('La session Stripe ne contient aucun identifiant.')
@@ -192,4 +213,14 @@ def get_user_licenses(discord_user_id):
                FROM license_keys WHERE "discordUserId"=%s
                ORDER BY "createdAt" DESC LIMIT 20''',
             (discord_user_id,),
+        ).fetchall()
+
+
+def get_all_licenses():
+    with connect() as con:
+        return con.execute(
+            '''SELECT "key", "plan", "status", "expiresAt", "discordUserId",
+                      "email", "source", "createdAt"
+               FROM license_keys
+               ORDER BY "createdAt" DESC, "id" DESC'''
         ).fetchall()

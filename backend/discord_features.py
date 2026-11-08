@@ -186,20 +186,17 @@ async def register_discord_features(bot):
     class TicketPanelView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=None)
+            self.add_item(TicketCategorySelect())
 
-        @discord.ui.button(
-            label='Ouvrir un ticket',
-            style=discord.ButtonStyle.primary,
-            emoji='🎫',
-            custom_id='onyx:ticket:create',
-        )
-        async def open_ticket(self, interaction, button):
+        async def open_ticket(self, interaction, category_key):
             if not interaction.guild or not isinstance(interaction.user, discord.Member):
                 await interaction.response.send_message(
                     'Les tickets sont disponibles uniquement sur le serveur.',
                     ephemeral=True,
                 )
                 return
+
+            category_label, category_description = TICKET_CATEGORIES[category_key]
             category_id = os.environ.get('TICKET_CATEGORY_ID')
             category = interaction.guild.get_channel(int(category_id)) if category_id else None
             if category_id and not isinstance(category, discord.CategoryChannel):
@@ -229,16 +226,19 @@ async def register_discord_features(bot):
                 safe_name = re.sub(r'[^a-z0-9-]+', '-', interaction.user.name.lower()).strip('-')
                 try:
                     channel = await interaction.guild.create_text_channel(
-                        name=f'ticket-{safe_name[:80] or interaction.user.id}',
+                        name=f'ticket-{category_key}-{safe_name[:70] or interaction.user.id}',
                         category=category,
                         overwrites=await ticket_overwrites(interaction.guild, interaction.user),
-                        topic=f'{TICKET_TOPIC_PREFIX}owner={interaction.user.id}|status=open',
+                        topic=(
+                            f'{TICKET_TOPIC_PREFIX}owner={interaction.user.id}|'
+                            f'status=open|category={category_key}'
+                        ),
                         reason=f'Ticket ouvert par {interaction.user} ({interaction.user.id})',
                     )
                     embed = discord.Embed(
-                        title='Bienvenue dans ton ticket',
+                        title=f'Ticket : {category_label}',
                         description=(
-                            f'{interaction.user.mention}, décris ta demande avec le plus de détails possible. '
+                            f'{interaction.user.mention}, {category_description}\n\n'
                             'Un membre du staff te répondra dès que possible.'
                         ),
                         color=discord.Color.blurple(),
@@ -261,6 +261,41 @@ async def register_discord_features(bot):
                     f'Ton ticket est prêt : {channel.mention}',
                     ephemeral=True,
                 )
+
+    TICKET_CATEGORIES = {
+        'aide': ('Aide', 'Explique comment nous pouvons t’aider.'),
+        'paiement': ('Problème de paiement', 'Décris le problème rencontré lors de ton paiement.'),
+        'cle': ('Problème de clé', 'Indique le problème avec ta clé de licence. Ne publie pas ta clé dans un salon public.'),
+        'launcher': ('Problème avec le launcher', 'Décris le problème rencontré avec le launcher.'),
+        'autre': ('Autre demande', 'Décris ta demande.'),
+    }
+
+    class TicketCategorySelect(discord.ui.Select):
+        def __init__(self):
+            super().__init__(
+                placeholder='Choisis le motif de ton ticket…',
+                min_values=1,
+                max_values=1,
+                custom_id='onyx:ticket:category',
+                options=[
+                    discord.SelectOption(
+                        label=label,
+                        value=key,
+                        description=description,
+                        emoji={
+                            'aide': '❓',
+                            'paiement': '💳',
+                            'cle': '🔑',
+                            'launcher': '🖥️',
+                            'autre': '📝',
+                        }[key],
+                    )
+                    for key, (label, description) in TICKET_CATEGORIES.items()
+                ],
+            )
+
+        async def callback(self, interaction):
+            await self.view.open_ticket(interaction, self.values[0])
 
     class TicketControlView(discord.ui.View):
         def __init__(self):
@@ -377,7 +412,7 @@ async def register_discord_features(bot):
             title='Centre de support Onyx',
             description=(
                 'Besoin d’aide avec Onyx Client, ta licence ou ton achat ? '
-                'Ouvre un ticket privé et notre équipe te répondra ici.\n\n'
+                'Choisis un motif dans le menu pour ouvrir un ticket privé.\n\n'
                 '**Un ticket ouvert par membre à la fois.**'
             ),
             color=discord.Color.blurple(),
