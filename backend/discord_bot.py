@@ -20,6 +20,7 @@ from license_store import (
     get_all_licenses,
     get_user_licenses,
     initialize_database,
+    delete_license,
     revoke_license,
 )
 
@@ -194,7 +195,6 @@ async def telecharger(interaction: discord.Interaction):
     if not licenses:
         await interaction.response.send_message(
             'Aucune licence active n’est associée à ton compte Discord.',
-            ephemeral=True,
         )
         return
     view = discord.ui.View()
@@ -209,7 +209,6 @@ async def telecharger(interaction: discord.Interaction):
     await interaction.response.send_message(
         'Ta licence est active. Clique sur le bouton ci-dessous pour télécharger le launcher.',
         view=view,
-        ephemeral=True,
     )
 
 
@@ -276,11 +275,26 @@ async def admin_lister_cles(interaction: discord.Interaction):
             self.owner_id = owner_id
             self.page = 0
             self.page_size = 10
+            self.selected_key = None
+            self.message = None
             self.update_buttons()
 
         def update_buttons(self):
             self.previous.disabled = self.page == 0
             self.next.disabled = (self.page + 1) * self.page_size >= len(licenses)
+            self.revoke.disabled = self.selected_key is None
+            self.delete.disabled = self.selected_key is None
+
+        def display_page(self):
+            self.clear_items()
+            start = self.page * self.page_size
+            self.add_item(LicenseSelect(licenses[start:start + self.page_size], self))
+            self.add_item(self.previous)
+            self.add_item(self.next)
+            self.add_item(self.revoke)
+            self.add_item(self.delete)
+            self.update_buttons()
+            return self.make_embed()
 
         def make_embed(self):
             start = self.page * self.page_size
@@ -301,7 +315,7 @@ async def admin_lister_cles(interaction: discord.Interaction):
                 color=discord.Color.blurple(),
             )
             embed.set_footer(
-                text=f'{start + 1}–{start + len(rows)} sur {len(licenses)} clés • visible uniquement par toi'
+                text=f'{start + 1}–{start + len(rows)} sur {len(licenses)} clés • liste privée'
             )
             return embed
 
@@ -314,20 +328,164 @@ async def admin_lister_cles(interaction: discord.Interaction):
                 return False
             return True
 
-        @discord.ui.button(label='Précédent', style=discord.ButtonStyle.secondary)
+        @discord.ui.button(label='Précédent', style=discord.ButtonStyle.secondary, row=1)
         async def previous(self, component_interaction, button):
             self.page -= 1
-            self.update_buttons()
-            await component_interaction.response.edit_message(embed=self.make_embed(), view=self)
+            self.selected_key = None
+            await component_interaction.response.edit_message(
+                embed=self.display_page(),
+                view=self,
+            )
 
-        @discord.ui.button(label='Suivant', style=discord.ButtonStyle.secondary)
+        @discord.ui.button(label='Suivant', style=discord.ButtonStyle.secondary, row=1)
         async def next(self, component_interaction, button):
             self.page += 1
-            self.update_buttons()
-            await component_interaction.response.edit_message(embed=self.make_embed(), view=self)
+            self.selected_key = None
+            await component_interaction.response.edit_message(
+                embed=self.display_page(),
+                view=self,
+            )
+
+        @discord.ui.button(
+            label='Révoquer',
+            style=discord.ButtonStyle.secondary,
+            emoji='🚫',
+            disabled=True,
+            row=1,
+        )
+        async def revoke(self, component_interaction, button):
+            await confirm_license_action(component_interaction, self, 'revoke')
+
+        @discord.ui.button(
+            label='Supprimer',
+            style=discord.ButtonStyle.danger,
+            emoji='🗑️',
+            disabled=True,
+            row=1,
+        )
+        async def delete(self, component_interaction, button):
+            await confirm_license_action(component_interaction, self, 'delete')
+
+    class LicenseSelect(discord.ui.Select):
+        def __init__(self, rows, parent):
+            self.list_view = parent
+            super().__init__(
+                placeholder='Choisir une clé à gérer…',
+                min_values=1,
+                max_values=1,
+                row=0,
+                options=[
+                    discord.SelectOption(
+                        label=row['key'],
+                        value=row['key'],
+                        description=(
+                            f'{PLANS.get(row["plan"], {}).get("name", row["plan"])} · '
+                            f'{row["status"]}'
+                        )[:100],
+                    )
+                    for row in rows
+                ],
+            )
+
+        async def callback(self, component_interaction):
+            self.list_view.selected_key = self.values[0]
+            self.list_view.update_buttons()
+            self.list_view.message = component_interaction.message
+            await component_interaction.response.edit_message(
+                embed=self.list_view.make_embed(),
+                view=self.list_view,
+            )
+
+    async def confirm_license_action(component_interaction, list_view, action):
+        key = list_view.selected_key
+        if not key:
+            await component_interaction.response.send_message(
+                'Sélectionne d’abord une clé.',
+                ephemeral=True,
+            )
+            return
+
+        action_label = 'révoquer' if action == 'revoke' else 'supprimer définitivement'
+        confirmation = discord.ui.View(timeout=60)
+
+        async def confirm(confirm_interaction):
+            if confirm_interaction.user.id != list_view.owner_id:
+                await confirm_interaction.response.send_message(
+                    'Seul l’administrateur qui a ouvert cette liste peut confirmer.',
+                    ephemeral=True,
+                )
+                return
+            changed = await asyncio.to_thread(
+                revoke_license if action == 'revoke' else delete_license,
+                key,
+            )
+            for index, row in enumerate(licenses):
+                if row['key'] == key:
+                    if action == 'delete':
+                        licenses.pop(index)
+                        if list_view.page and list_view.page * list_view.page_size >= len(licenses):
+                            list_view.page -= 1
+                    else:
+                        row['status'] = 'revoked'
+                    break
+
+            list_view.selected_key = None
+            if licenses:
+                await list_view.message.edit(
+                    embed=list_view.display_page(),
+                    view=list_view,
+                )
+            else:
+                await list_view.message.edit(
+                    content='Aucune clé de licence trouvée.',
+                    embed=None,
+                    view=None,
+                )
+            completed_action = (
+                'a été révoquée' if action == 'revoke' else 'a été supprimée définitivement'
+            )
+            result = (
+                f'La clé `{key}` {completed_action}.'
+                if changed
+                else 'Cette clé n’existe plus ou n’est plus active.'
+            )
+            await confirm_interaction.response.edit_message(
+                content=result,
+                view=None,
+            )
+
+        async def cancel(cancel_interaction):
+            await cancel_interaction.response.edit_message(
+                content='Action annulée.',
+                view=None,
+            )
+
+        confirm_button = discord.ui.Button(
+            label=f'Confirmer : {action_label}',
+            style=discord.ButtonStyle.danger,
+        )
+        confirm_button.callback = confirm
+        cancel_button = discord.ui.Button(
+            label='Annuler',
+            style=discord.ButtonStyle.secondary,
+        )
+        cancel_button.callback = cancel
+        confirmation.add_item(confirm_button)
+        confirmation.add_item(cancel_button)
+        list_view.message = component_interaction.message
+        await component_interaction.response.send_message(
+            f'Confirmer **{action_label}** pour la clé `{key}` ?',
+            view=confirmation,
+            ephemeral=True,
+        )
 
     view = LicenseListView(interaction.user.id)
-    await interaction.response.send_message(embed=view.make_embed(), view=view, ephemeral=True)
+    await interaction.response.send_message(
+        embed=view.display_page(),
+        view=view,
+        ephemeral=True,
+    )
+    view.message = await interaction.original_response()
 
 
 def main():

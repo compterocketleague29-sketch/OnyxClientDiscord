@@ -29,7 +29,7 @@ python discord_bot.py
 
 Publie l'API derrière une URL HTTPS stable. `DISCORD_GUILD_ID` est facultatif; le renseigner synchronise les commandes immédiatement sur ce serveur pendant la mise en place. Sans cette variable, les commandes sont enregistrées globalement et leur propagation peut prendre plus de temps.
 
-Invite l'application Discord sur ton serveur avec les portées `bot` et `applications.commands`. Active également **Message Content Intent** dans le portail développeur Discord pour que les transcripts contiennent les messages. Pour les tickets, le bot a besoin des permissions **Gérer les salons**, **Voir les salons**, **Envoyer des messages**, **Lire l’historique**, **Joindre des fichiers** et **Intégrer des liens**. La commande `/clear` exige **Gérer les messages** pour la personne qui l’utilise et pour le bot.
+Invite l'application Discord sur ton serveur avec les portées `bot` et `applications.commands`. Active également **Message Content Intent** dans le portail développeur Discord pour que les transcripts contiennent les messages. Pour les tickets, le bot a besoin des permissions **Gérer les salons**, **Voir les salons**, **Envoyer des messages**, **Lire l’historique**, **Joindre des fichiers** et **Intégrer des liens**. Pour la modération, accorde **Bannir des membres** et **Modérer des membres**; place le rôle du bot au-dessus des rôles des personnes à modérer. `/clear` exige aussi **Gérer les messages** pour l’utilisateur.
 
 ## Déploiement Railway depuis GitHub
 
@@ -43,18 +43,21 @@ Le bot reste connecté tant que son service Railway est déployé et actif. Rail
 
 ## Commandes Discord
 
-- `/aide` : présente les commandes de licence, de téléchargement et de support.
+- `/aide` : présente publiquement les commandes de licence, de téléchargement et de support.
 - `/acheter` : crée un paiement Stripe pour l'une des cinq offres : 3 jours (4,99 €, 1 PC), 1 semaine (7,99 €, 1 PC), 1 mois (14,99 €, 1 PC), 3 mois (29,99 €, 1 PC) ou à vie (59,99 €, 2 PC). La clé est créée après confirmation du paiement et récupérable avec `/mes-licences`.
-- `/mes-licences` : affiche en privé les licences actives liées au compte.
+- `/mes-licences` : affiche en privé les licences actives et leurs clés.
 - `/lier-cle` : associe à Discord une clé existante, par exemple achetée sur le site.
-- `/telecharger` : affiche un bouton « Télécharger le launcher » aux membres ayant une licence active, sans montrer l'URL.
-- `/admin-creer-cle`, `/admin-revoquer-cle`, `/admin-licences` et `/admin-lister-cles` : commandes réservées aux administrateurs; l'inventaire complet des clés est privé et paginé.
+- `/telecharger` : répond publiquement avec un bouton « Télécharger le launcher » aux membres ayant une licence active, sans montrer l'URL.
+- `/admin-creer-cle`, `/admin-revoquer-cle`, `/admin-licences` et `/admin-lister-cles` : commandes réservées aux administrateurs; l'inventaire complet des clés est privé, paginé et propose de révoquer ou supprimer une clé avec confirmation. La suppression d'une clé Discord conserve une trace empêchant la recréation de la licence par un webhook Stripe rejoué.
 - `/ticket-panel` : publie le menu de création de tickets privés (aide, paiement, clé, launcher ou autre). Le salon de tickets peut être choisi avec `TICKET_CATEGORY_ID`.
-- `/ticket-close`, `/ticket-add` et `/ticket-transcript` : ferment et archivent un ticket, ajoutent un membre ou fournissent son transcript HTML. Si `TICKET_LOG_CHANNEL_ID` est défini, le transcript est aussi envoyé dans ce salon.
+- Le panneau de chaque ticket propose **Ajouter un membre**, **Prendre en charge**, **Transcript** et **Fermer et supprimer**. À la fermeture, le transcript est envoyé au salon de logs ou au propriétaire en message privé, puis le ticket est supprimé après 10 secondes.
+- `/ticket-actions` ajoute ces boutons aux tickets déjà ouverts; `/ticket-close`, `/ticket-add` et `/ticket-transcript` restent aussi disponibles.
 - `/clear` : supprime de 1 à 100 messages dans un salon; permission Discord **Gérer les messages** requise.
 - `/giveaway` : lance un tirage au sort avec bouton de participation et tirage automatique. Les participations et échéances sont conservées dans PostgreSQL pour survivre aux redémarrages.
+- `/ban`, `/unban`, `/timeout` et `/untimeout` : commandes de modération publiques, protégées par les permissions Discord de bannissement ou de modération, avec vérification de la hiérarchie des rôles.
 
 Après le déploiement des mises à jour Discord, utilise `/ticket-panel` à nouveau pour remplacer l'ancien panneau par le menu de catégories.
+Les clés, liens personnels d'achat, réponses de `/lier-cle`, liste admin et confirmations de suppression restent privées; les réponses générales de `/aide`, `/telecharger`, de `/clear`, des giveaways et de la modération sont publiques.
 
 Le lien du `.exe` peut circuler, mais son utilisation reste protégée par la validation de licence auprès de l'API.
 

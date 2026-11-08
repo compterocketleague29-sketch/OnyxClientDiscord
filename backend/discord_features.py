@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 import discord
@@ -68,6 +69,21 @@ def ticket_owner(channel):
 def ticket_is_closed(channel):
     topic = channel.topic or ''
     return topic.startswith(TICKET_TOPIC_PREFIX) and 'status=closed' in topic
+
+
+def ticket_delete_deadline(channel):
+    topic = channel.topic or ''
+    if not topic.startswith(TICKET_TOPIC_PREFIX):
+        return None
+    fields = dict(
+        field.split('=', 1)
+        for field in topic[len(TICKET_TOPIC_PREFIX):].split('|')
+        if '=' in field
+    )
+    try:
+        return int(fields['delete_at'])
+    except (KeyError, ValueError):
+        return None
 
 
 async def ticket_overwrites(guild, member):
@@ -300,15 +316,85 @@ async def register_discord_features(bot):
     class TicketControlView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=None)
+            self.add_item(TicketMemberSelect())
 
         @discord.ui.button(
-            label='Fermer le ticket',
+            label='Prendre en charge',
+            style=discord.ButtonStyle.primary,
+            emoji='🙋',
+            custom_id='onyx:ticket:claim',
+        )
+        async def claim_ticket_button(self, interaction, button):
+            if not is_staff(interaction):
+                await interaction.response.send_message(
+                    'Seul le staff peut prendre ce ticket en charge.',
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.send_message(
+                f'🙋 Ticket pris en charge par {interaction.user.mention}.'
+            )
+
+        @discord.ui.button(
+            label='Transcript',
+            style=discord.ButtonStyle.secondary,
+            emoji='📄',
+            custom_id='onyx:ticket:transcript',
+        )
+        async def transcript_ticket_button(self, interaction, button):
+            await send_ticket_transcript(interaction)
+
+        @discord.ui.button(
+            label='Fermer et supprimer',
             style=discord.ButtonStyle.danger,
             emoji='🔒',
             custom_id='onyx:ticket:close',
         )
         async def close_ticket_button(self, interaction, button):
             await close_ticket(interaction)
+
+    class TicketMemberSelect(discord.ui.UserSelect):
+        def __init__(self):
+            super().__init__(
+                placeholder='Ajouter un membre au ticket…',
+                min_values=1,
+                max_values=1,
+                custom_id='onyx:ticket:add_member',
+            )
+
+        async def callback(self, interaction):
+            channel = interaction.channel
+            owner_id = ticket_owner(channel) if isinstance(channel, discord.TextChannel) else None
+            if owner_id is None or ticket_is_closed(channel):
+                await interaction.response.send_message(
+                    'Cette action est uniquement disponible dans un ticket ouvert.',
+                    ephemeral=True,
+                )
+                return
+            if interaction.user.id != owner_id and not is_staff(interaction):
+                await interaction.response.send_message(
+                    'Seul le propriétaire du ticket ou le staff peut ajouter un membre.',
+                    ephemeral=True,
+                )
+                return
+            member = self.values[0]
+            if not isinstance(member, discord.Member) or member.bot:
+                await interaction.response.send_message(
+                    'Sélectionne un membre humain de ce serveur.',
+                    ephemeral=True,
+                )
+                return
+            await channel.set_permissions(
+                member,
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                attach_files=True,
+            )
+            await interaction.response.send_message(
+                f'{member.mention} a été ajouté au ticket.',
+                allowed_mentions=discord.AllowedMentions(users=[member]),
+            )
 
     class GiveawayView(discord.ui.View):
         def __init__(self):
@@ -350,9 +436,36 @@ async def register_discord_features(bot):
             await interaction.response.send_message('Ce ticket est déjà fermé.', ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        await interaction.response.defer(thinking=True)
         try:
             logged = await send_transcript_to_logs(interaction.guild, channel)
+            if not logged:
+                owner_member = interaction.guild.get_member(owner_id)
+                if owner_member is None:
+                    try:
+                        owner_member = await interaction.guild.fetch_member(owner_id)
+                    except discord.NotFound:
+                        owner_member = None
+                if owner_member is None:
+                    await interaction.followup.send(
+                        'Impossible de remettre le transcript au propriétaire. '
+                        'Configure un salon de logs avant de fermer ce ticket.',
+                    )
+                    return
+                try:
+                    await owner_member.send(
+                        f'Transcript du ticket **{channel.name}** :',
+                        file=await make_transcript(channel),
+                    )
+                    logged = True
+                except discord.Forbidden:
+                    logger.warning('DM fermé pour le propriétaire du ticket %s.', owner_id)
+                    await interaction.followup.send(
+                        'Je ne peux pas envoyer le transcript en message privé. '
+                        'Configure `TICKET_LOG_CHANNEL_ID` puis réessaie.',
+                    )
+                    return
+
             owner = interaction.guild.get_member(owner_id)
             overwrites = channel.overwrites
             for target, overwrite in overwrites.items():
@@ -374,26 +487,96 @@ async def register_discord_features(bot):
             topic = f'{TICKET_TOPIC_PREFIX}owner={owner_id}|status=closed'
             await channel.edit(
                 name=f'closed-{channel.name.removeprefix("ticket-")}'[:100],
-                topic=topic,
+                topic=f'{topic}|delete_at={int(time.time()) + 10}',
                 overwrites=overwrites,
                 reason=f'Ticket fermé par {interaction.user} ({interaction.user.id})',
             )
-            await channel.send(
+            closure_message = await channel.send(
                 f'🔒 Ticket fermé par {interaction.user.mention}. '
-                + (
-                    'Le transcript a été envoyé au salon de logs.'
-                    if logged
-                    else 'Configure TICKET_LOG_CHANNEL_ID pour archiver automatiquement le transcript.'
-                )
+                f'Le transcript a été archivé. Ce salon sera supprimé dans 10 secondes.'
             )
+            if interaction.message:
+                try:
+                    await interaction.message.edit(view=None)
+                except discord.HTTPException:
+                    logger.exception('Impossible de désactiver les actions du ticket %s.', channel.id)
         except discord.HTTPException:
             logger.exception('Impossible de fermer le ticket %s', channel.id)
             await interaction.followup.send(
                 'La fermeture a échoué. Vérifie les permissions du bot.',
+            )
+            return
+
+        await interaction.followup.send(
+            'Ticket fermé; transcript archivé. Le salon sera supprimé dans 10 secondes.'
+        )
+        await asyncio.sleep(10)
+        try:
+            await channel.delete(reason=f'Ticket archivé; fermeture par {interaction.user}')
+        except discord.NotFound:
+            pass
+        except discord.HTTPException:
+            logger.exception('Impossible de supprimer le ticket fermé %s.', channel.id)
+            try:
+                await closure_message.reply('La suppression automatique a échoué; un administrateur peut supprimer ce salon.')
+            except discord.HTTPException:
+                logger.exception('Impossible de signaler la suppression manquée du ticket %s.', channel.id)
+
+    async def ensure_ticket_member(interaction, member):
+        if member.bot:
+            await interaction.response.send_message(
+                'Seuls les membres humains peuvent être ajoutés au ticket.',
+                ephemeral=True,
+            )
+            return False
+        channel = interaction.channel
+        owner_id = ticket_owner(channel) if isinstance(channel, discord.TextChannel) else None
+        if owner_id is None or ticket_is_closed(channel):
+            await interaction.response.send_message(
+                'Cette action est uniquement disponible dans un ticket ouvert.',
+                ephemeral=True,
+            )
+            return False
+        if interaction.user.id != owner_id and not is_staff(interaction):
+            await interaction.response.send_message(
+                'Seul le propriétaire du ticket ou le staff peut ajouter un membre.',
+                ephemeral=True,
+            )
+            return False
+        await channel.set_permissions(
+            member,
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True,
+            attach_files=True,
+        )
+        await interaction.response.send_message(
+            f'{member.mention} a été ajouté au ticket.',
+            allowed_mentions=discord.AllowedMentions(users=[member]),
+        )
+        return True
+
+    async def send_ticket_transcript(interaction):
+        channel = interaction.channel
+        owner_id = ticket_owner(channel) if isinstance(channel, discord.TextChannel) else None
+        if owner_id is None:
+            await interaction.response.send_message(
+                'Cette action est uniquement disponible dans un ticket.',
                 ephemeral=True,
             )
             return
-        await interaction.followup.send('Ticket fermé et archivé.', ephemeral=True)
+        if interaction.user.id != owner_id and not is_staff(interaction):
+            await interaction.response.send_message(
+                'Seul le propriétaire du ticket ou le staff peut consulter le transcript.',
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await interaction.followup.send(
+            'Transcript du ticket :',
+            file=await make_transcript(channel),
+            ephemeral=True,
+        )
 
     @bot.tree.command(name='ticket-panel', description='Publier le panneau de support Onyx')
     @app_commands.guild_only()
@@ -413,13 +596,36 @@ async def register_discord_features(bot):
             description=(
                 'Besoin d’aide avec Onyx Client, ta licence ou ton achat ? '
                 'Choisis un motif dans le menu pour ouvrir un ticket privé.\n\n'
-                '**Un ticket ouvert par membre à la fois.**'
+                '**Un ticket ouvert par membre à la fois.**\n'
+                'Dans le ticket : ajouter un membre, prise en charge staff, transcript ou fermeture.'
             ),
             color=discord.Color.blurple(),
         )
         embed.set_footer(text='Support Onyx Client')
         await channel.send(embed=embed, view=TicketPanelView())
         await interaction.response.send_message(f'Panneau publié dans {channel.mention}.', ephemeral=True)
+
+    @bot.tree.command(name='ticket-actions', description='Afficher les actions du ticket actuel')
+    @app_commands.guild_only()
+    async def ticket_actions(interaction: discord.Interaction):
+        channel = interaction.channel
+        owner_id = ticket_owner(channel) if isinstance(channel, discord.TextChannel) else None
+        if owner_id is None or ticket_is_closed(channel):
+            await interaction.response.send_message(
+                'Cette commande doit être utilisée dans un ticket ouvert.',
+                ephemeral=True,
+            )
+            return
+        if interaction.user.id != owner_id and not is_staff(interaction):
+            await interaction.response.send_message(
+                'Seul le propriétaire du ticket ou le staff peut afficher ces actions.',
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            'Actions du ticket :',
+            view=TicketControlView(),
+        )
 
     @bot.tree.command(name='ticket-close', description='Fermer et archiver le ticket actuel')
     @app_commands.guild_only()
@@ -429,46 +635,12 @@ async def register_discord_features(bot):
     @bot.tree.command(name='ticket-add', description='Ajouter un membre au ticket actuel')
     @app_commands.guild_only()
     async def ticket_add(interaction: discord.Interaction, membre: discord.Member):
-        channel = interaction.channel
-        owner_id = ticket_owner(channel) if isinstance(channel, discord.TextChannel) else None
-        if owner_id is None:
-            await interaction.response.send_message('Cette commande doit être utilisée dans un ticket.', ephemeral=True)
-            return
-        if interaction.user.id != owner_id and not is_staff(interaction):
-            await interaction.response.send_message('Seul le propriétaire ou le staff peut ajouter un membre.', ephemeral=True)
-            return
-        if ticket_is_closed(channel):
-            await interaction.response.send_message('Le ticket est fermé.', ephemeral=True)
-            return
-        await channel.set_permissions(
-            membre,
-            view_channel=True,
-            send_messages=True,
-            read_message_history=True,
-            attach_files=True,
-        )
-        await interaction.response.send_message(
-            f'{membre.mention} a été ajouté au ticket.',
-            allowed_mentions=discord.AllowedMentions(users=[membre]),
-        )
+        await ensure_ticket_member(interaction, membre)
 
     @bot.tree.command(name='ticket-transcript', description='Télécharger le transcript HTML du ticket')
     @app_commands.guild_only()
     async def ticket_transcript(interaction: discord.Interaction):
-        channel = interaction.channel
-        owner_id = ticket_owner(channel) if isinstance(channel, discord.TextChannel) else None
-        if owner_id is None:
-            await interaction.response.send_message('Cette commande doit être utilisée dans un ticket.', ephemeral=True)
-            return
-        if interaction.user.id != owner_id and not is_staff(interaction):
-            await interaction.response.send_message('Seul le propriétaire ou le staff peut consulter le transcript.', ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.followup.send(
-            'Transcript du ticket :',
-            file=await make_transcript(channel),
-            ephemeral=True,
-        )
+        await send_ticket_transcript(interaction)
 
     @bot.tree.command(name='aide', description='Afficher les commandes Onyx Client')
     async def aide(interaction: discord.Interaction):
@@ -490,7 +662,7 @@ async def register_discord_features(bot):
             value='Utilise le panneau de support du serveur pour ouvrir un ticket privé.',
             inline=False,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed)
 
     @bot.tree.command(name='clear', description='Supprimer des messages récents dans un salon')
     @app_commands.guild_only()
@@ -508,7 +680,150 @@ async def register_discord_features(bot):
         deleted = await channel.purge(limit=nombre, bulk=True)
         await interaction.followup.send(
             f'{len(deleted)} message(s) supprimé(s) dans {channel.mention}.',
-            ephemeral=True,
+        )
+
+    @bot.tree.command(name='ban', description='Bannir un membre du serveur')
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(ban_members=True)
+    @app_commands.checks.bot_has_permissions(ban_members=True)
+    @app_commands.describe(raison='Motif ajouté au journal de modération')
+    async def ban_member(
+        interaction: discord.Interaction,
+        membre: discord.Member,
+        raison: app_commands.Range[str, 1, 400] = 'Aucune raison fournie',
+    ):
+        if membre.id == interaction.user.id or membre.id == interaction.guild.me.id:
+            await interaction.response.send_message(
+                'Tu ne peux pas bannir cette personne.',
+                ephemeral=True,
+            )
+            return
+        if (
+            interaction.user.id != interaction.guild.owner_id
+            and membre.top_role >= interaction.user.top_role
+        ):
+            await interaction.response.send_message(
+                'Tu ne peux pas bannir un membre ayant un rôle égal ou supérieur au tien.',
+                ephemeral=True,
+            )
+            return
+        if membre.top_role >= interaction.guild.me.top_role:
+            await interaction.response.send_message(
+                'Le rôle le plus élevé du bot doit être au-dessus de celui du membre.',
+                ephemeral=True,
+            )
+            return
+        await membre.ban(reason=f'{interaction.user}: {raison}', delete_message_seconds=0)
+        await interaction.response.send_message(
+            f'🔨 {membre.mention} a été banni. Motif : {raison}',
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @bot.tree.command(name='unban', description='Débannir un utilisateur par son identifiant Discord')
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(ban_members=True)
+    @app_commands.checks.bot_has_permissions(ban_members=True)
+    @app_commands.describe(identifiant='Identifiant Discord de l’utilisateur banni')
+    async def unban_member(
+        interaction: discord.Interaction,
+        identifiant: app_commands.Range[str, 17, 20],
+        raison: app_commands.Range[str, 1, 400] = 'Aucune raison fournie',
+    ):
+        if not identifiant.isdecimal():
+            await interaction.response.send_message(
+                'L’identifiant Discord doit être numérique.',
+                ephemeral=True,
+            )
+            return
+        user = discord.Object(id=int(identifiant))
+        try:
+            await interaction.guild.unban(user, reason=f'{interaction.user}: {raison}')
+        except discord.NotFound:
+            await interaction.response.send_message(
+                'Cet utilisateur ne figure pas dans la liste des bannis.',
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            f'✅ <@{identifiant}> a été débanni. Motif : {raison}',
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @bot.tree.command(name='timeout', description='Mettre un membre en timeout')
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.checks.bot_has_permissions(moderate_members=True)
+    @app_commands.describe(duree_minutes='Durée de 1 minute à 28 jours')
+    async def timeout_member(
+        interaction: discord.Interaction,
+        membre: discord.Member,
+        duree_minutes: app_commands.Range[int, 1, 40320],
+        raison: app_commands.Range[str, 1, 400] = 'Aucune raison fournie',
+    ):
+        if membre.id == interaction.user.id or membre.id == interaction.guild.me.id:
+            await interaction.response.send_message(
+                'Tu ne peux pas appliquer un timeout à cette personne.',
+                ephemeral=True,
+            )
+            return
+        if (
+            interaction.user.id != interaction.guild.owner_id
+            and membre.top_role >= interaction.user.top_role
+        ):
+            await interaction.response.send_message(
+                'Tu ne peux pas modérer un membre ayant un rôle égal ou supérieur au tien.',
+                ephemeral=True,
+            )
+            return
+        if membre.top_role >= interaction.guild.me.top_role:
+            await interaction.response.send_message(
+                'Le rôle le plus élevé du bot doit être au-dessus de celui du membre.',
+                ephemeral=True,
+            )
+            return
+        await membre.timeout(
+            timedelta(minutes=duree_minutes),
+            reason=f'{interaction.user}: {raison}',
+        )
+        await interaction.response.send_message(
+            f'⏳ {membre.mention} est en timeout pour {duree_minutes} minute(s). Motif : {raison}',
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @bot.tree.command(name='untimeout', description='Retirer le timeout d’un membre')
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.checks.bot_has_permissions(moderate_members=True)
+    async def remove_timeout(
+        interaction: discord.Interaction,
+        membre: discord.Member,
+        raison: app_commands.Range[str, 1, 400] = 'Aucune raison fournie',
+    ):
+        if membre.id == interaction.user.id or membre.id == interaction.guild.me.id:
+            await interaction.response.send_message(
+                'Cette action ne peut pas être appliquée à cette personne.',
+                ephemeral=True,
+            )
+            return
+        if (
+            interaction.user.id != interaction.guild.owner_id
+            and membre.top_role >= interaction.user.top_role
+        ):
+            await interaction.response.send_message(
+                'Tu ne peux pas modérer un membre ayant un rôle égal ou supérieur au tien.',
+                ephemeral=True,
+            )
+            return
+        if membre.top_role >= interaction.guild.me.top_role:
+            await interaction.response.send_message(
+                'Le rôle le plus élevé du bot doit être au-dessus de celui du membre.',
+                ephemeral=True,
+            )
+            return
+        await membre.timeout(None, reason=f'{interaction.user}: {raison}')
+        await interaction.response.send_message(
+            f'✅ Timeout retiré pour {membre.mention}. Motif : {raison}',
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @bot.tree.command(name='giveaway', description='Lancer un giveaway Onyx avec tirage automatique')
@@ -552,7 +867,7 @@ async def register_discord_features(bot):
             logger.exception('Impossible d’enregistrer le giveaway %s', message.id)
             await message.delete()
             raise
-        await interaction.followup.send(f'Giveaway lancé dans {channel.mention} !', ephemeral=True)
+        await interaction.followup.send(f'Giveaway lancé dans {channel.mention} !')
 
     @tasks.loop(seconds=30)
     async def process_giveaways():
@@ -607,9 +922,29 @@ async def register_discord_features(bot):
     async def before_giveaways():
         await bot.wait_until_ready()
 
+    @tasks.loop(seconds=30)
+    async def cleanup_closed_tickets():
+        now = int(time.time())
+        for guild in bot.guilds:
+            for channel in guild.text_channels:
+                deadline = ticket_delete_deadline(channel)
+                if ticket_is_closed(channel) and deadline is not None and deadline <= now:
+                    try:
+                        await channel.delete(reason='Nettoyage automatique du ticket archivé')
+                    except discord.NotFound:
+                        continue
+                    except discord.HTTPException:
+                        logger.exception('Impossible de supprimer le ticket fermé %s.', channel.id)
+
+    @cleanup_closed_tickets.before_loop
+    async def before_ticket_cleanup():
+        await bot.wait_until_ready()
+
     bot.add_view(TicketPanelView())
     bot.add_view(TicketControlView())
     bot.add_view(GiveawayView())
     await asyncio.to_thread(initialize_discord_storage)
     if not process_giveaways.is_running():
         process_giveaways.start()
+    if not cleanup_closed_tickets.is_running():
+        cleanup_closed_tickets.start()

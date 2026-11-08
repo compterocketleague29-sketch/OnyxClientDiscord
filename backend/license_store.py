@@ -67,6 +67,12 @@ def initialize_database():
             'CREATE INDEX IF NOT EXISTS license_keys_discord_user_idx '
             'ON license_keys ("discordUserId")'
         )
+        con.execute(
+            '''CREATE TABLE IF NOT EXISTS deleted_discord_licenses (
+                "stripeSessionId" TEXT PRIMARY KEY,
+                "deletedAt" TIMESTAMP NOT NULL DEFAULT NOW()
+            )'''
+        )
 
 
 def generate_license_key():
@@ -117,6 +123,12 @@ def fulfill_discord_checkout(session):
                 if existing['discordUserId'] != discord_user_id:
                     raise RuntimeError('La session Stripe est déjà liée à un autre compte Discord.')
                 return existing['key']
+            deleted = con.execute(
+                'SELECT 1 FROM deleted_discord_licenses WHERE "stripeSessionId"=%s',
+                (session_id,),
+            ).fetchone()
+            if deleted:
+                return None
 
             for _ in range(5):
                 key = generate_license_key()
@@ -224,3 +236,27 @@ def get_all_licenses():
                FROM license_keys
                ORDER BY "createdAt" DESC, "id" DESC'''
         ).fetchall()
+
+
+def delete_license(key):
+    normalized_key = key.strip().upper()
+    with connect() as con:
+        with con.transaction():
+            license_row = con.execute(
+                '''SELECT "stripeSessionId", "source" FROM license_keys
+                   WHERE "key"=%s FOR UPDATE''',
+                (normalized_key,),
+            ).fetchone()
+            if not license_row:
+                return False
+            if license_row['source'] == 'discord' and license_row['stripeSessionId']:
+                con.execute(
+                    '''INSERT INTO deleted_discord_licenses ("stripeSessionId")
+                       VALUES (%s) ON CONFLICT DO NOTHING''',
+                    (license_row['stripeSessionId'],),
+                )
+            result = con.execute(
+                'DELETE FROM license_keys WHERE "key"=%s',
+                (normalized_key,),
+            )
+            return result.rowcount > 0

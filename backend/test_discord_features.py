@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from discord_features import ticket_is_closed, ticket_owner
+from discord_features import ticket_delete_deadline, ticket_is_closed, ticket_owner
 
 
 class TicketMetadataTests(unittest.TestCase):
@@ -19,6 +19,15 @@ class TicketMetadataTests(unittest.TestCase):
         self.assertIsNone(ticket_owner(SimpleNamespace(topic='general')))
         self.assertIsNone(ticket_owner(SimpleNamespace(topic='onyx-ticket|owner=invalid|status=open')))
         self.assertFalse(ticket_is_closed(SimpleNamespace(topic=None)))
+
+    def test_reads_automatic_deletion_deadline(self):
+        channel = SimpleNamespace(
+            topic='onyx-ticket|owner=123456789|status=closed|delete_at=1794103000'
+        )
+        self.assertEqual(ticket_delete_deadline(channel), 1794103000)
+        self.assertIsNone(
+            ticket_delete_deadline(SimpleNamespace(topic='onyx-ticket|owner=123456789|status=open'))
+        )
 
 
 if __name__ == '__main__':
