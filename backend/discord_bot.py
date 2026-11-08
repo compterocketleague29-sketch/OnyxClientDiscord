@@ -16,11 +16,13 @@ from license_store import (
     PLANS,
     claim_license,
     create_admin_license,
+    create_client_admin_credentials,
     get_active_licenses,
     get_all_licenses,
     get_user_licenses,
     initialize_database,
     delete_license,
+    revoke_client_admin_credentials,
     revoke_license,
 )
 
@@ -291,6 +293,51 @@ async def admin_creer_cle(
             'vérifie que le membre autorise les MP du serveur.'
         )
     await interaction.edit_original_response(content=message)
+
+
+@bot.tree.command(name='admin-key', description='Créer des identifiants admin pour le client')
+@app_commands.guild_only()
+async def admin_key(interaction: discord.Interaction):
+    if not is_admin(interaction):
+        await interaction.response.send_message(
+            'Commande réservée aux administrateurs.',
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    username, password = await asyncio.to_thread(
+        create_client_admin_credentials,
+        str(interaction.user.id),
+    )
+    await interaction.edit_original_response(
+        content=(
+            'Identifiants admin créés. Ils permettent de passer l’activation du client '
+            'et resteront valides jusqu’à leur révocation.\n'
+            f'Identifiant : `{username}`\n'
+            f'Mot de passe : `{password}`\n'
+            'Garde ces identifiants secrets. Ils ne seront affichés qu’une seule fois.'
+        )
+    )
+
+
+@bot.tree.command(name='admin-key-revoke', description='Révoquer des identifiants admin du client')
+@app_commands.guild_only()
+async def admin_key_revoke(interaction: discord.Interaction, identifiant: str):
+    if not is_admin(interaction):
+        await interaction.response.send_message(
+            'Commande réservée aux administrateurs.',
+            ephemeral=True,
+        )
+        return
+
+    revoked = await asyncio.to_thread(revoke_client_admin_credentials, identifiant.strip())
+    message = (
+        'Identifiants admin révoqués.'
+        if revoked
+        else 'Aucun identifiant admin actif ne correspond à ce nom.'
+    )
+    await interaction.response.send_message(message, ephemeral=True)
 
 
 @bot.tree.command(name='admin-revoquer-cle', description='Révoquer une licence')

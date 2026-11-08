@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import os
 import secrets
 from datetime import datetime, timezone
@@ -73,6 +75,16 @@ def initialize_database():
                 "deletedAt" TIMESTAMP NOT NULL DEFAULT NOW()
             )'''
         )
+        con.execute(
+            '''CREATE TABLE IF NOT EXISTS client_admin_accounts (
+                "username" TEXT PRIMARY KEY,
+                "passwordSalt" BYTEA NOT NULL,
+                "passwordHash" BYTEA NOT NULL,
+                "createdByDiscordId" TEXT NOT NULL,
+                "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                "revokedAt" TIMESTAMPTZ
+            )'''
+        )
 
 
 def generate_license_key():
@@ -81,6 +93,61 @@ def generate_license_key():
         for _ in range(4)
     ]
     return f'ONYX-{"-".join(groups)}'
+
+
+def _admin_password_hash(password, salt):
+    return hashlib.scrypt(
+        password.encode('utf-8'),
+        salt=salt,
+        n=2**14,
+        r=8,
+        p=1,
+        dklen=32,
+    )
+
+
+def create_client_admin_credentials(discord_user_id):
+    for _ in range(5):
+        username = f'onyx-{secrets.token_urlsafe(9)}'
+        password = secrets.token_urlsafe(24)
+        salt = secrets.token_bytes(16)
+        password_hash = _admin_password_hash(password, salt)
+        try:
+            with connect() as con:
+                con.execute(
+                    '''INSERT INTO client_admin_accounts
+                       ("username", "passwordSalt", "passwordHash", "createdByDiscordId")
+                       VALUES (%s, %s, %s, %s)''',
+                    (username, salt, password_hash, str(discord_user_id)),
+                )
+            return username, password
+        except psycopg.errors.UniqueViolation:
+            continue
+    raise RuntimeError('Impossible de générer un identifiant admin unique.')
+
+
+def verify_client_admin_credentials(username, password):
+    with connect() as con:
+        account = con.execute(
+            '''SELECT "passwordSalt", "passwordHash" FROM client_admin_accounts
+               WHERE "username"=%s AND "revokedAt" IS NULL''',
+            (username,),
+        ).fetchone()
+
+    salt = account['passwordSalt'] if account else bytes(16)
+    expected_hash = account['passwordHash'] if account else bytes(32)
+    actual_hash = _admin_password_hash(password, salt)
+    return account is not None and hmac.compare_digest(actual_hash, expected_hash)
+
+
+def revoke_client_admin_credentials(username):
+    with connect() as con:
+        result = con.execute(
+            '''UPDATE client_admin_accounts SET "revokedAt"=NOW()
+               WHERE "username"=%s AND "revokedAt" IS NULL''',
+            (username,),
+        )
+        return result.rowcount > 0
 
 
 def validate_discord_checkout(session):

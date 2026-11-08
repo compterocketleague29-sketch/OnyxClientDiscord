@@ -791,6 +791,8 @@ async def register_discord_features(bot):
                     '`/annonce-bilingue` — saisir une annonce en français; le bot la traduit en anglais et publie les deux versions (staff).\n'
                     '`/giveaway <prix> <duree_heures> [gagnants] [salon]` — lancer un tirage au sort (staff).\n'
                     '`/admin-creer-cle <membre> <offre>` — créer une licence pour un membre (administrateur; résultat privé).\n'
+                    '`/admin-key` — générer en privé des identifiants réutilisables pour accéder au client sans licence (administrateur).\n'
+                    '`/admin-key-revoke <identifiant>` — révoquer des identifiants d’accès admin au client (administrateur).\n'
                     '`/admin-revoquer-cle <cle>` — révoquer une licence (administrateur; résultat privé).\n'
                     '`/admin-licences <membre>` — consulter les licences d’un membre (administrateur; résultat privé).\n'
                     '`/admin-lister-cles` — publier l’inventaire avec clés masquées; l’administrateur reçoit aussi la liste complète et les actions privées.'

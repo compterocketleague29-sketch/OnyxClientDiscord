@@ -10,7 +10,14 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 load_dotenv()
-from license_store import PLANS, connect, fulfill_discord_checkout, initialize_database, validate_discord_checkout
+from license_store import (
+    PLANS,
+    connect,
+    fulfill_discord_checkout,
+    initialize_database,
+    validate_discord_checkout,
+    verify_client_admin_credentials,
+)
 
 
 def utcnow():
@@ -35,9 +42,23 @@ class CheckRequest(BaseModel):
     device_id: str = Field(min_length=16, max_length=128, pattern=r'^[^,]+$')
 
 
+class AdminLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=128)
+
+
 @app.get('/health')
 def health():
     return {'status': 'ok'}
+
+
+@app.post('/v1/admin/validate')
+def validate_admin(payload: AdminLoginRequest):
+    valid = verify_client_admin_credentials(payload.username, payload.password)
+    return {
+        'valid': valid,
+        'message': 'Accès admin autorisé' if valid else 'Identifiants admin invalides.',
+    }
 
 
 @app.post('/v1/stripe/webhook')

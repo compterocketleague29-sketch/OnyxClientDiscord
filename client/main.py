@@ -1,7 +1,6 @@
 import os
 import queue
 import sys
-import uuid
 import time
 import threading
 import tempfile
@@ -19,6 +18,8 @@ import customtkinter as ctk
 from PIL import Image
 
 from controller_profiles import ps5, xbox
+from admin_auth import validate_admin_credentials
+from device_identity import get_device_directory, get_device_id
 from license_storage import forget_remembered_key, load_remembered_key, save_remembered_key
 from alpha_boost import (
     BOOST_FILENAME,
@@ -77,7 +78,7 @@ API_URL = load_api_url()
 
 
 # Donnees conservees dans le profil Windows (le dossier d'un .exe PyInstaller est temporaire).
-DEVICE_DIR = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'MacroClientV6'
+DEVICE_DIR = get_device_directory()
 DEVICE_FILE = DEVICE_DIR / 'device_id.txt'
 CONTROLLER_PLATFORM_FILE = DEVICE_DIR / 'controller-platform.txt'
 REMEMBERED_KEY_FILE = DEVICE_DIR / 'remembered-key.dat'
@@ -104,30 +105,24 @@ def save_controller_platform(platform):
     CONTROLLER_PLATFORM_FILE.write_text(platform, encoding='utf-8')
 
 
-def get_device_id():
-    DEVICE_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        existing = DEVICE_FILE.read_text(encoding='utf-8').strip()
-        return str(uuid.UUID(existing))
-    except FileNotFoundError:
-        pass
-    except ValueError:
-        raise OSError('Identifiant d installation invalide')
-
-    device_id = str(uuid.uuid4())
-    try:
-        with DEVICE_FILE.open('x', encoding='utf-8') as f:
-            f.write(device_id)
-        return device_id
-    except FileExistsError:
-        return str(uuid.UUID(DEVICE_FILE.read_text(encoding='utf-8').strip()))
-
-
 def validate_key(key):
     if not API_URL:
         return False, 'Serveur de licence non configuré. Contactez le support.', None
     try:
-        response = requests.post(API_URL + '/v1/validate', json={'key': key, 'device_id': get_device_id()}, timeout=8)
+        device_id = get_device_id(DEVICE_FILE)
+    except OSError as error:
+        return (
+            False,
+            f'Impossible de sauvegarder l’identifiant de ce PC. Détail : {error}',
+            None,
+        )
+
+    try:
+        response = requests.post(
+            API_URL + '/v1/validate',
+            json={'key': key, 'device_id': device_id},
+            timeout=8,
+        )
         response.raise_for_status()
         data = response.json()
         if not data.get('valid'):
@@ -136,9 +131,7 @@ def validate_key(key):
         raw = data.get('expires_at')
         expiry = datetime.fromisoformat(raw.replace('Z', '+00:00')) if raw else None
         return True, 'Licence active', expiry
-    except OSError:
-        return False, 'Impossible de sauvegarder l identifiant de ce PC.', None
-    except (requests.RequestException, ValueError, KeyError, TypeError):
+    except (OSError, requests.RequestException, ValueError, KeyError, TypeError):
         return False, 'Serveur indisponible. Verifiez Internet.', None
 
 
@@ -396,10 +389,18 @@ if __name__ == '__main__':
     with Image.open(logo_path) as source:
         logo_source = source.copy()
     activation_logo = ctk.CTkImage(light_image=logo_source, dark_image=logo_source, size=(148, 148))
+    admin_activation_logo = ctk.CTkImage(light_image=logo_source, dark_image=logo_source, size=(112, 112))
     sidebar_logo = ctk.CTkImage(light_image=logo_source, dark_image=logo_source, size=(48, 48))
     dashboard_logo = ctk.CTkImage(light_image=logo_source, dark_image=logo_source, size=(166, 166))
     switches = {name: ctk.BooleanVar(value=False) for name in MACROS}
-    session = {'key': None, 'expires': None, 'last_validation': 0.0, 'check_pending': False}
+    session = {
+        'key': None,
+        'expires': None,
+        'mode': None,
+        'admin_credentials': None,
+        'last_validation': 0.0,
+        'check_pending': False,
+    }
     validation_results = queue.Queue()
     selected_platform, platform_load_error = load_controller_platform()
     platform_state = {'platform': selected_platform, 'load_error': platform_load_error}
@@ -498,6 +499,8 @@ if __name__ == '__main__':
             engine.stop()
             session['key'] = None
             session['expires'] = None
+            session['mode'] = None
+            session['admin_credentials'] = None
             activation('Votre licence est expiree ou revoquee.')
             return False
         return True
@@ -506,21 +509,29 @@ if __name__ == '__main__':
         if not session['key'] or session['check_pending']:
             return
         key = session['key']
+        mode = session['mode']
+        admin_credentials = session['admin_credentials']
         session['check_pending'] = True
 
         def check():
-            validation_results.put((key, *validate_key(key)))
+            if mode == 'admin':
+                username, password = admin_credentials
+                ok, message = validate_admin_credentials(username, password, API_URL)
+                result = (ok, message, None)
+            else:
+                result = validate_key(key)
+            validation_results.put((mode, key, *result))
 
         threading.Thread(target=check, daemon=True).start()
 
     def poll_license_checks():
         try:
-            key, ok, message, expiry = validation_results.get_nowait()
+            mode, key, ok, message, expiry = validation_results.get_nowait()
         except queue.Empty:
             pass
         else:
             session['check_pending'] = False
-            if key == session['key']:
+            if mode == session['mode'] and key == session['key']:
                 session['last_validation'] = time.monotonic()
                 if ok:
                     session['expires'] = expiry
@@ -528,14 +539,26 @@ if __name__ == '__main__':
                     engine.stop()
                     session['key'] = None
                     session['expires'] = None
-                    activation('Votre licence est expiree ou revoquee.')
+                    session['mode'] = None
+                    session['admin_credentials'] = None
+                    activation(
+                        'Accès admin révoqué ou identifiants invalides.'
+                        if mode == 'admin'
+                        else 'Votre licence est expiree ou revoquee.'
+                    )
 
         if session['key']:
             expiry = session['expires']
-            if expiry is not None and expiry <= datetime.now(expiry.tzinfo):
+            if (
+                session['mode'] == 'license'
+                and expiry is not None
+                and expiry <= datetime.now(expiry.tzinfo)
+            ):
                 engine.stop()
                 session['key'] = None
                 session['expires'] = None
+                session['mode'] = None
+                session['admin_credentials'] = None
                 activation('Votre licence est expiree ou revoquee.')
             elif time.monotonic() - session['last_validation'] >= 300:
                 request_license_check()
@@ -700,6 +723,8 @@ if __name__ == '__main__':
                     )
                 session['key'] = key
                 session['expires'] = expiry
+                session['mode'] = 'license'
+                session['admin_credentials'] = None
                 session['last_validation'] = time.monotonic()
                 for name in MACROS:
                     switches[name].set(False)
@@ -710,8 +735,99 @@ if __name__ == '__main__':
                 status.configure(text=msg)
 
         button(frame, 'ACTIVER ONYX  →', submit).pack(fill='x', padx=28, pady=(9, 10))
+        button(
+            frame,
+            'ACCÈS ADMINISTRATEUR',
+            admin_login,
+            fg_color='transparent',
+            hover_color='#211B28',
+            border_width=1,
+            border_color='#493258',
+            height=36,
+        ).pack(fill='x', padx=28, pady=(0, 6))
         label(frame, 'ACTIVATION SÉCURISÉE  ·  WINDOWS 10 / 11', 9, True, MUTED).pack(pady=(0, 12))
         entry.bind('<Return>', lambda event: submit())
+
+    def admin_login(error=''):
+        set_window_mode(True)
+        clear()
+        frame = card(app, width=416, height=526)
+        frame.pack(expand=True, padx=18, pady=18)
+        frame.pack_propagate(False)
+        ctk.CTkLabel(frame, text='', image=admin_activation_logo).pack(pady=(13, 3))
+        label(frame, 'Accès administrateur', 21, True).pack(pady=(0, 4))
+        label(frame, 'Identifiants créés avec la commande /admin-key.', 11, color=MUTED).pack(
+            pady=(0, 17)
+        )
+        label(frame, 'IDENTIFIANT', 9, True, MUTED).pack(anchor='w', padx=28, pady=(0, 7))
+        username_entry = ctk.CTkEntry(
+            frame,
+            height=44,
+            justify='center',
+            placeholder_text='Identifiant admin',
+            corner_radius=11,
+            border_color=accent(),
+            font=('Arial', 13),
+        )
+        username_entry.pack(fill='x', padx=28)
+        label(frame, 'MOT DE PASSE', 9, True, MUTED).pack(
+            anchor='w',
+            padx=28,
+            pady=(12, 7),
+        )
+        password_entry = ctk.CTkEntry(
+            frame,
+            height=44,
+            justify='center',
+            placeholder_text='Mot de passe admin',
+            show='*',
+            corner_radius=11,
+            border_color=accent(),
+            font=('Arial', 13),
+        )
+        password_entry.pack(fill='x', padx=28)
+        status = label(frame, error, 11, color='#FF6B8A', wraplength=360, justify='left')
+        status.pack(anchor='w', padx=28, pady=(10, 4))
+
+        def submit_admin():
+            username = username_entry.get().strip()
+            password = password_entry.get().strip()
+            ok, message = validate_admin_credentials(username, password, API_URL)
+            if not ok:
+                status.configure(text=message)
+                return
+
+            session['key'] = f'admin:{username}'
+            session['expires'] = None
+            session['mode'] = 'admin'
+            session['admin_credentials'] = (username, password)
+            session['last_validation'] = time.monotonic()
+            for name in MACROS:
+                switches[name].set(False)
+                update_macro(name)
+            engine.start()
+            dashboard()
+
+        button(frame, 'CONNEXION ADMIN  →', submit_admin).pack(
+            fill='x',
+            padx=28,
+            pady=(9, 8),
+        )
+        button(
+            frame,
+            'RETOUR À L’ACTIVATION',
+            activation,
+            fg_color='transparent',
+            hover_color='#211B28',
+            border_width=1,
+            border_color='#493258',
+            height=36,
+        ).pack(fill='x', padx=28, pady=(0, 8))
+        label(frame, 'AUTHENTIFICATION SÉCURISÉE  ·  WINDOWS 10 / 11', 9, True, MUTED).pack(
+            pady=(0, 10)
+        )
+        username_entry.bind('<Return>', lambda event: password_entry.focus_set())
+        password_entry.bind('<Return>', lambda event: submit_admin())
 
     def dashboard():
         content = layout('Accueil')
