@@ -19,7 +19,7 @@ La base doit être la même que celle du site pour retrouver les licences exista
 
 ## Démarrage sous Windows
 
-Depuis `OnyxClient/backend` dans le dépôt cloné, ouvre deux terminaux :
+Depuis `backend` à la racine du dépôt cloné, ouvre deux terminaux :
 
 ```powershell
 python -m uvicorn app:app --host 0.0.0.0 --port 8000
@@ -32,7 +32,7 @@ Invite l'application Discord sur ton serveur avec les autorisations `bot` et `ap
 
 ## Déploiement Railway depuis GitHub
 
-Dans ce dépôt, les fichiers de l'application se trouvent sous `OnyxClient/`. Crée deux services Railway à partir du même dépôt GitHub et définis leur **Root Directory** sur `/OnyxClient/backend` pour chacun :
+Crée deux services Railway à partir du même dépôt GitHub et définis leur **Root Directory** sur `/backend` pour chacun :
 
 1. **API** — commande de démarrage : `uvicorn app:app --host 0.0.0.0 --port $PORT`. Active un domaine public et configure le health check sur `/health`. Ajoute ses variables listées plus haut.
 2. **Bot** — commande de démarrage : `python discord_bot.py`. Ajoute ses variables listées plus haut. Ce service doit rester actif pour répondre aux commandes Discord.
@@ -51,7 +51,7 @@ Le lien du `.exe` peut circuler, mais son utilisation reste protégée par la va
 
 ## Construire le client
 
-Le client n'utilise plus l'URL du site comme API par défaut. Depuis PowerShell, dans le dossier `OnyxClient/client` du dépôt cloné :
+Le client n'utilise plus l'URL du site comme API par défaut. Depuis PowerShell, dans le dossier `client` à la racine du dépôt cloné :
 
 ```powershell
 $env:MACRO_API_URL = 'https://<hôte-api>'
