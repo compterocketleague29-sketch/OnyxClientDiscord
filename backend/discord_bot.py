@@ -4,6 +4,7 @@ import os
 from datetime import timezone
 
 import discord
+import psycopg
 import stripe
 from discord import app_commands
 from dotenv import load_dotenv
@@ -247,10 +248,20 @@ async def lier_cle(interaction: discord.Interaction, cle: str):
 
 @bot.tree.command(name='telecharger', description='Obtenir le lien de téléchargement du client')
 async def telecharger(interaction: discord.Interaction):
-    licenses = await asyncio.to_thread(get_active_licenses, str(interaction.user.id))
+    await interaction.response.defer()
+    try:
+        licenses = await asyncio.to_thread(get_active_licenses, str(interaction.user.id))
+    except (psycopg.Error, RuntimeError):
+        logger.exception('Échec de lecture des licences pour le téléchargement de %s.', interaction.user.id)
+        await interaction.followup.send(
+            'Impossible de vérifier ta licence pour le moment. Réessaie dans quelques instants.',
+            ephemeral=True,
+        )
+        return
+
     if not licenses:
-        await interaction.response.send_message(
-            'Aucune licence active n’est associée à ton compte Discord.',
+        await interaction.edit_original_response(
+            content='Aucune licence active n’est associée à ton compte Discord.',
         )
         return
     view = discord.ui.View()
@@ -262,8 +273,8 @@ async def telecharger(interaction: discord.Interaction):
             emoji='⬇️',
         )
     )
-    await interaction.response.send_message(
-        'Ta licence est active. Clique sur le bouton ci-dessous pour télécharger le launcher.',
+    await interaction.edit_original_response(
+        content='Ta licence est active. Clique sur le bouton ci-dessous pour télécharger le launcher.',
         view=view,
     )
 
