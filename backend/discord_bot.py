@@ -7,6 +7,7 @@ import discord
 import stripe
 from discord import app_commands
 from dotenv import load_dotenv
+from discord_features import register_discord_features
 
 load_dotenv()
 stripe.api_key = os.environ.get('STRIPE_SECRET_KEY')
@@ -64,10 +65,14 @@ def license_summary(license_row):
 
 class OnyxDiscordBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=discord.Intents.default())
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
+        await asyncio.to_thread(initialize_database)
+        await register_discord_features(self)
         guild_id = os.environ.get('DISCORD_GUILD_ID')
         if guild_id:
             guild = discord.Object(id=int(guild_id))
@@ -232,7 +237,6 @@ def main():
     token = os.environ.get('DISCORD_BOT_TOKEN')
     if not token:
         raise RuntimeError('La variable DISCORD_BOT_TOKEN est obligatoire.')
-    initialize_database()
     bot.run(token)
 
 
