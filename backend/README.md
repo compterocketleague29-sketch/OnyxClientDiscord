@@ -9,10 +9,10 @@ Le bot, le client Windows et le site utilisent la même base PostgreSQL. Le bot 
 En local, copie `.env.example` en `.env` dans ce dossier et ajoute les valeurs de développement. Sur Railway, configure les valeurs dans **Variables** pour chaque service; ne crée pas de `.env` dans le dépôt. Au minimum :
 
 - **API** : `DATABASE_URL`, `STRIPE_WEBHOOK_SECRET`.
-- **Bot** : `DATABASE_URL`, `DISCORD_BOT_TOKEN`, `STRIPE_SECRET_KEY`, `DISCORD_ADMIN_USER_IDS` et/ou `DISCORD_ADMIN_ROLE_IDS`, `DOWNLOAD_URL`. `DISCORD_GUILD_ID`, `TICKET_CATEGORY_ID` et `TICKET_LOG_CHANNEL_ID` sont facultatifs.
+- **Bot** : `DATABASE_URL`, `DISCORD_BOT_TOKEN`, `STRIPE_SECRET_KEY`, `DISCORD_ADMIN_USER_IDS` et/ou `DISCORD_ADMIN_ROLE_IDS`, `DOWNLOAD_URL`. `DISCORD_GUILD_ID`, `TICKET_LOG_CHANNEL_ID`, `LIBRETRANSLATE_URL` et `LIBRETRANSLATE_API_KEY` sont facultatifs.
 
 Configure exactement la même `DATABASE_URL` PostgreSQL pour l'API, le bot et le site afin de conserver les licences existantes. `DOWNLOAD_URL` est un lien public, pas un secret. `MACRO_API_URL` est également une adresse publique : elle sert à construire le client et ne doit pas contenir de clé secrète.
-`TICKET_CATEGORY_ID` désigne la catégorie où créer les tickets; `TICKET_LOG_CHANNEL_ID` désigne le salon privé où envoyer les transcripts à la fermeture. Active le **mode développeur** dans Discord pour copier ces identifiants. Les membres du staff doivent être administrateurs du serveur ou avoir le rôle indiqué dans `DISCORD_ADMIN_ROLE_IDS`.
+Le bot place chaque ticket dans la catégorie Discord correspondant au motif sélectionné et mentionne le rôle support à son ouverture. Les catégories et le rôle de notification des tickets sont configurés par leurs identifiants dans le code. `TICKET_LOG_CHANNEL_ID` désigne le salon privé où envoyer les transcripts à la fermeture. Active le **mode développeur** dans Discord pour copier ces identifiants. Les membres du staff doivent être administrateurs du serveur ou avoir le rôle indiqué dans `DISCORD_ADMIN_ROLE_IDS`.
 
 Dans Stripe, ajoute un webhook vers `https://<domaine-api-railway>/v1/stripe/webhook` pour l'événement `checkout.session.completed`. Renseigne le secret de signature fourni par Stripe dans les variables Railway de l'API comme `STRIPE_WEBHOOK_SECRET`.
 
@@ -29,7 +29,7 @@ python discord_bot.py
 
 Publie l'API derrière une URL HTTPS stable. `DISCORD_GUILD_ID` est facultatif; le renseigner synchronise les commandes immédiatement sur ce serveur pendant la mise en place. Sans cette variable, les commandes sont enregistrées globalement et leur propagation peut prendre plus de temps.
 
-Invite l'application Discord sur ton serveur avec les portées `bot` et `applications.commands`. Active également **Message Content Intent** dans le portail développeur Discord pour que les transcripts contiennent les messages. Pour les tickets, le bot a besoin des permissions **Gérer les salons**, **Voir les salons**, **Envoyer des messages**, **Lire l’historique**, **Joindre des fichiers** et **Intégrer des liens**. Pour la modération, accorde **Bannir des membres** et **Modérer des membres**; place le rôle du bot au-dessus des rôles des personnes à modérer. `/clear` exige aussi **Gérer les messages** pour l’utilisateur.
+Invite l'application Discord sur ton serveur avec les portées `bot` et `applications.commands`. Active **Server Members Intent** et **Message Content Intent** dans le portail développeur Discord. Le premier est requis pour attribuer automatiquement le rôle `1567658169247989882` à chaque nouvel arrivant; le second permet aux transcripts de contenir les messages. Place le rôle du bot au-dessus du rôle automatique afin qu'il puisse l'attribuer. Pour les tickets, le bot a besoin des permissions **Gérer les salons**, **Voir les salons**, **Envoyer des messages**, **Lire l’historique**, **Joindre des fichiers** et **Intégrer des liens**. Pour la modération, accorde **Bannir des membres** et **Modérer des membres**; place le rôle du bot au-dessus des rôles des personnes à modérer. `/clear` exige aussi **Gérer les messages** pour l’utilisateur.
 
 ## Déploiement Railway depuis GitHub
 
@@ -49,7 +49,8 @@ Le bot reste connecté tant que son service Railway est déployé et actif. Rail
 - `/lier-cle` : associe à Discord une clé existante, par exemple achetée sur le site.
 - `/telecharger` : répond publiquement avec un bouton « Télécharger le launcher » aux membres ayant une licence active, sans montrer l'URL.
 - `/admin-creer-cle`, `/admin-revoquer-cle`, `/admin-licences` et `/admin-lister-cles` : commandes réservées aux administrateurs. `/admin-lister-cles` publie un inventaire paginé visible par tous avec les clés masquées; l'administrateur qui lance la commande reçoit aussi en privé l'inventaire complet et les actions pour révoquer ou supprimer une clé avec confirmation. La suppression d'une clé Discord conserve une trace empêchant la recréation de la licence par un webhook Stripe rejoué.
-- `/ticket-panel` : publie le menu de création de tickets privés (aide, paiement, clé, launcher ou autre). Le salon de tickets peut être choisi avec `TICKET_CATEGORY_ID`.
+- `/ticket-panel` : publie le menu de création de tickets privés (aide, paiement, clé, launcher ou autre). Chaque ticket est créé dans sa catégorie dédiée et le rôle de support est notifié à l’ouverture.
+- `/annonce-bilingue` : commande réservée au staff; ouvre un formulaire pour saisir le français, traduit le texte en anglais via LibreTranslate, puis publie les deux versions dans le salon. Configure `LIBRETRANSLATE_URL` et, si ton instance l’exige, `LIBRETRANSLATE_API_KEY`. Le texte soumis est transmis au service de traduction : n’y inclus pas d’informations confidentielles.
 - Le panneau de chaque ticket propose **Ajouter un membre**, **Prendre en charge**, **Transcript** et **Fermer et supprimer**. À la fermeture, le transcript est envoyé au salon de logs ou au propriétaire en message privé, puis le ticket est supprimé après 10 secondes.
 - `/ticket-actions` ajoute ces boutons aux tickets déjà ouverts; `/ticket-close`, `/ticket-add` et `/ticket-transcript` restent aussi disponibles.
 - `/clear` : supprime de 1 à 100 messages dans un salon; permission Discord **Gérer les messages** requise.

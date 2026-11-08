@@ -1,11 +1,14 @@
 import asyncio
 import html
 import io
+import json
 import logging
 import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import discord
 from discord import app_commands
@@ -24,7 +27,57 @@ from discord_store import (
 
 logger = logging.getLogger('onyx.discord.features')
 TICKET_TOPIC_PREFIX = 'onyx-ticket|'
+TICKET_PING_ROLE_ID = 1567658169424027852
+TICKET_CATEGORY_CHANNEL_IDS = {
+    'aide': 1567658172590854274,
+    'paiement': 1568841537738121367,
+    'cle': 1567658174134095921,
+    'launcher': 1567658174490607696,
+    'autre': 1567658174490607697,
+}
 ticket_creation_locks = {}
+
+
+class TranslationServiceError(RuntimeError):
+    pass
+
+
+def translate_french_to_english(text):
+    endpoint = os.environ.get(
+        'LIBRETRANSLATE_URL',
+        'https://libretranslate.com/translate',
+    )
+    payload = {
+        'q': text,
+        'source': 'fr',
+        'target': 'en',
+        'format': 'text',
+    }
+    api_key = os.environ.get('LIBRETRANSLATE_API_KEY')
+    if api_key:
+        payload['api_key'] = api_key
+    request = Request(
+        endpoint,
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            result = json.loads(response.read().decode('utf-8'))
+    except HTTPError as error:
+        raise TranslationServiceError(
+            f'Le service de traduction a répondu HTTP {error.code}.'
+        ) from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise TranslationServiceError('Le service de traduction est inaccessible.') from error
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise TranslationServiceError('La réponse du service de traduction est invalide.') from error
+
+    translated = result.get('translatedText') if isinstance(result, dict) else None
+    if not isinstance(translated, str) or not translated.strip():
+        raise TranslationServiceError('Aucune traduction n’a été renvoyée.')
+    return translated.strip()
 
 
 def configured_ids(variable_name):
@@ -50,8 +103,9 @@ def is_staff(interaction):
     if interaction.user.id in configured_user_ids():
         return True
     member_roles = getattr(interaction.user, 'roles', ())
-    admin_role_ids = configured_ids('DISCORD_ADMIN_ROLE_IDS')
-    return any(role.id in admin_role_ids for role in member_roles)
+    staff_role_ids = configured_ids('DISCORD_ADMIN_ROLE_IDS')
+    staff_role_ids.add(TICKET_PING_ROLE_ID)
+    return any(role.id in staff_role_ids for role in member_roles)
 
 
 def ticket_owner(channel):
@@ -107,6 +161,7 @@ async def ticket_overwrites(guild, member):
             embed_links=True,
         )
     staff_role_ids = configured_ids('DISCORD_ADMIN_ROLE_IDS')
+    staff_role_ids.add(TICKET_PING_ROLE_ID)
     for role in guild.roles:
         if role.id in staff_role_ids or role.permissions.administrator or role.permissions.manage_guild:
             overwrites[role] = discord.PermissionOverwrite(
@@ -213,11 +268,12 @@ async def register_discord_features(bot):
                 return
 
             category_label, category_description = TICKET_CATEGORIES[category_key]
-            category_id = os.environ.get('TICKET_CATEGORY_ID')
-            category = interaction.guild.get_channel(int(category_id)) if category_id else None
-            if category_id and not isinstance(category, discord.CategoryChannel):
+            category_id = TICKET_CATEGORY_CHANNEL_IDS[category_key]
+            category = interaction.guild.get_channel(category_id)
+            if not isinstance(category, discord.CategoryChannel):
                 await interaction.response.send_message(
-                    'La catégorie des tickets est invalide. Contacte un administrateur.',
+                    f'La catégorie Discord « {category_label} » est introuvable. '
+                    'Contacte un administrateur.',
                     ephemeral=True,
                 )
                 return
@@ -260,11 +316,26 @@ async def register_discord_features(bot):
                         color=discord.Color.blurple(),
                     )
                     embed.set_footer(text='Onyx Client • Support privé')
+                    staff_role = interaction.guild.get_role(TICKET_PING_ROLE_ID)
+                    if staff_role is None:
+                        logger.error(
+                            'Le rôle de notification des tickets %s est introuvable sur le serveur %s.',
+                            TICKET_PING_ROLE_ID,
+                            interaction.guild.id,
+                        )
+                    mentions = [interaction.user]
+                    role_mentions = [staff_role] if staff_role else []
+                    content = interaction.user.mention
+                    if staff_role:
+                        content = f'{content} {staff_role.mention}'
                     await channel.send(
-                        content=interaction.user.mention,
+                        content=content,
                         embed=embed,
                         view=TicketControlView(),
-                        allowed_mentions=discord.AllowedMentions(users=[interaction.user]),
+                        allowed_mentions=discord.AllowedMentions(
+                            users=mentions,
+                            roles=role_mentions,
+                        ),
                     )
                 except discord.HTTPException:
                     logger.exception('Impossible de créer un ticket pour %s', interaction.user.id)
@@ -663,6 +734,85 @@ async def register_discord_features(bot):
             inline=False,
         )
         await interaction.response.send_message(embed=embed)
+
+    @bot.tree.command(
+        name='annonce-bilingue',
+        description='Composer une annonce française et la publier aussi en anglais',
+    )
+    @app_commands.guild_only()
+    async def bilingual_announcement(interaction: discord.Interaction):
+        if not is_staff(interaction):
+            await interaction.response.send_message(
+                'Commande réservée au staff.',
+                ephemeral=True,
+            )
+            return
+        if not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message(
+                'Utilise cette commande dans un salon textuel.',
+                ephemeral=True,
+            )
+            return
+
+        class BilingualAnnouncementModal(discord.ui.Modal, title='Annonce bilingue'):
+            french_text = discord.ui.TextInput(
+                label='Message en français',
+                placeholder='Écris le message à publier…',
+                style=discord.TextStyle.paragraph,
+                max_length=2000,
+            )
+
+            async def on_submit(self, modal_interaction):
+                await modal_interaction.response.defer(ephemeral=True, thinking=True)
+                try:
+                    english_text = await asyncio.to_thread(
+                        translate_french_to_english,
+                        self.french_text.value,
+                    )
+                except TranslationServiceError:
+                    logger.exception('Échec de la traduction d’une annonce bilingue.')
+                    await modal_interaction.followup.send(
+                        'La traduction automatique a échoué. Réessaie plus tard ou contacte un administrateur.',
+                        ephemeral=True,
+                    )
+                    return
+
+                description = (
+                    f'🇫🇷 **Français**\n{self.french_text.value}\n\n'
+                    f'🇬🇧 **English**\n{english_text}'
+                )
+                if len(description) > 4096:
+                    await modal_interaction.followup.send(
+                        'Le message traduit dépasse la taille maximale. Raccourcis le texte français et réessaie.',
+                        ephemeral=True,
+                    )
+                    return
+
+                embed = discord.Embed(
+                    description=description,
+                    color=discord.Color.blurple(),
+                )
+                try:
+                    await modal_interaction.channel.send(
+                        embed=embed,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    logger.exception(
+                        'Impossible de publier l’annonce bilingue dans le salon %s.',
+                        modal_interaction.channel.id,
+                    )
+                    await modal_interaction.followup.send(
+                        'La traduction est prête, mais je n’ai pas pu publier le message dans ce salon.',
+                        ephemeral=True,
+                    )
+                    return
+                await modal_interaction.followup.send(
+                    'Annonce publiée en français et en anglais.',
+                    ephemeral=True,
+                )
+
+        await interaction.response.send_modal(BilingualAnnouncementModal())
 
     @bot.tree.command(name='clear', description='Supprimer des messages récents dans un salon')
     @app_commands.guild_only()

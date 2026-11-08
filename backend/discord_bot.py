@@ -41,6 +41,7 @@ DOWNLOAD_URL = os.environ.get(
     'DOWNLOAD_URL',
     'https://github.com/compterocketleague29-sketch/onyx-client-releases/releases/download/v1.0/Onyx-Client.exe',
 )
+AUTO_ROLE_ID = 1567658169247989882
 
 
 def format_euros(amount_cents):
@@ -74,8 +75,33 @@ class OnyxDiscordBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
+        intents.members = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
+
+    async def on_member_join(self, member: discord.Member):
+        role = member.guild.get_role(AUTO_ROLE_ID)
+        if role is None:
+            logger.error(
+                'Le rôle automatique %s est introuvable sur le serveur %s.',
+                AUTO_ROLE_ID,
+                member.guild.id,
+            )
+            return
+        try:
+            await member.add_roles(role, reason='Attribution automatique à l’arrivée')
+        except discord.Forbidden:
+            logger.exception(
+                'Permission insuffisante pour attribuer le rôle %s à %s.',
+                AUTO_ROLE_ID,
+                member.id,
+            )
+        except discord.HTTPException:
+            logger.exception(
+                'Échec de l’attribution du rôle %s à %s.',
+                AUTO_ROLE_ID,
+                member.id,
+            )
 
     async def setup_hook(self):
         await asyncio.to_thread(initialize_database)

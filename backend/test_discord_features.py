@@ -1,10 +1,29 @@
 import unittest
 from types import SimpleNamespace
 
-from discord_features import ticket_delete_deadline, ticket_is_closed, ticket_owner
+from discord_features import (
+    TICKET_CATEGORY_CHANNEL_IDS,
+    TICKET_PING_ROLE_ID,
+    ticket_delete_deadline,
+    ticket_is_closed,
+    ticket_owner,
+)
 
 
 class TicketMetadataTests(unittest.TestCase):
+    def test_ticket_categories_and_notification_role_are_configured(self):
+        self.assertEqual(
+            TICKET_CATEGORY_CHANNEL_IDS,
+            {
+                'aide': 1567658172590854274,
+                'paiement': 1568841537738121367,
+                'cle': 1567658174134095921,
+                'launcher': 1567658174490607696,
+                'autre': 1567658174490607697,
+            },
+        )
+        self.assertEqual(TICKET_PING_ROLE_ID, 1567658169424027852)
+
     def test_reads_ticket_owner(self):
         channel = SimpleNamespace(topic='onyx-ticket|owner=123456789|status=open')
         self.assertEqual(ticket_owner(channel), 123456789)
