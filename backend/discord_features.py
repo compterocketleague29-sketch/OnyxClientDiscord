@@ -927,8 +927,22 @@ async def register_discord_features(bot):
         now = int(time.time())
         for guild in bot.guilds:
             for channel in guild.text_channels:
+                if not ticket_is_closed(channel):
+                    continue
                 deadline = ticket_delete_deadline(channel)
-                if ticket_is_closed(channel) and deadline is not None and deadline <= now:
+                if deadline is None:
+                    try:
+                        await channel.edit(
+                            topic=f'{channel.topic}|delete_at={now + 10}',
+                            reason='Programmer le nettoyage d’un ancien ticket fermé',
+                        )
+                    except discord.HTTPException:
+                        logger.exception(
+                            'Impossible de programmer la suppression du ticket fermé %s.',
+                            channel.id,
+                        )
+                    continue
+                if deadline <= now:
                     try:
                         await channel.delete(reason='Nettoyage automatique du ticket archivé')
                     except discord.NotFound:
