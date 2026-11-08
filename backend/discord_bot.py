@@ -177,10 +177,19 @@ async def acheter(interaction: discord.Interaction, offre: app_commands.Choice[s
         )
         return
 
+    payment_view = discord.ui.View()
+    payment_view.add_item(
+        discord.ui.Button(
+            label='Appuie ici pour payer',
+            style=discord.ButtonStyle.link,
+            url=checkout.url,
+            emoji='💳',
+        )
+    )
     await interaction.response.send_message(
-        f'Paiement sécurisé pour **{plan["name"]}** ({format_euros(plan["price_cents"])}):\n'
-        f'{checkout.url}\n'
+        f'Paiement sécurisé pour **{plan["name"]}** ({format_euros(plan["price_cents"])}).\n'
         'Après le paiement, récupère ta clé avec `/mes-licences`.',
+        view=payment_view,
         ephemeral=True,
     )
 
