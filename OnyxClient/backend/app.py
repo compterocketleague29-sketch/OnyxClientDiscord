@@ -1,35 +1,19 @@
-"""API de licences pour le client Windows.
-
-Les cles sont creees par le site (achat Stripe ou page /admin) dans la table
-`license_keys`. Cette API lit et met a jour cette meme table : une seule base.
-"""
+"""API de licences utilisée par le client Windows et le bot Discord."""
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
-import psycopg
+import stripe
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from psycopg.rows import dict_row
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 load_dotenv()
-DATABASE_URL = os.environ['DATABASE_URL']
-
-# Doit rester identique a web/lib/products.ts (durationDays, maxDevices).
-PLANS = {
-    'semaine': {'days': 7, 'max_devices': 1},
-    'mois': {'days': 30, 'max_devices': 1},
-    'vie': {'days': None, 'max_devices': 2},
-}
-
-
-def connect():
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+from license_store import PLANS, connect, fulfill_discord_checkout, initialize_database, validate_discord_checkout
 
 
 def utcnow():
-    # Les colonnes du site sont des `timestamp` sans fuseau, stockees en UTC.
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
@@ -39,24 +23,7 @@ def iso_utc(value):
 
 @asynccontextmanager
 async def lifespan(app):
-    # Meme schema que web/lib/db/schema.ts ; ne fait rien si la table existe deja.
-    with connect() as con:
-        con.execute('''CREATE TABLE IF NOT EXISTS license_keys (
-            "id" SERIAL PRIMARY KEY,
-            "key" TEXT NOT NULL UNIQUE,
-            "plan" TEXT NOT NULL,
-            "status" TEXT NOT NULL DEFAULT 'active',
-            "email" TEXT,
-            "stripeSessionId" TEXT,
-            "source" TEXT NOT NULL DEFAULT 'stripe',
-            "amountCents" INTEGER,
-            "hwid" TEXT,
-            "activatedAt" TIMESTAMP,
-            "expiresAt" TIMESTAMP,
-            "note" TEXT,
-            "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
-            "userId" TEXT
-        )''')
+    await asyncio.to_thread(initialize_database)
     yield
 
 
@@ -71,6 +38,39 @@ class CheckRequest(BaseModel):
 @app.get('/health')
 def health():
     return {'status': 'ok'}
+
+
+@app.post('/v1/stripe/webhook')
+async def stripe_webhook(request: Request):
+    webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET')
+    signature = request.headers.get('stripe-signature')
+    if not webhook_secret:
+        raise HTTPException(status_code=503, detail='Webhook Stripe non configuré.')
+    if not signature:
+        raise HTTPException(status_code=400, detail='Signature Stripe manquante.')
+
+    try:
+        event = stripe.Webhook.construct_event(
+            await request.body(),
+            signature,
+            webhook_secret,
+        )
+    except (ValueError, stripe.SignatureVerificationError) as error:
+        raise HTTPException(status_code=400, detail='Signature Stripe invalide.') from error
+
+    if event.type in ('checkout.session.completed', 'checkout.session.async_payment_succeeded'):
+        session = event.data.object
+        if (session.get('metadata') or {}).get('purchase_source') != 'discord':
+            return {'received': True}
+        if event.type == 'checkout.session.completed' and session.get('payment_status') != 'paid':
+            return {'received': True}
+        try:
+            validate_discord_checkout(session)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        await asyncio.to_thread(fulfill_discord_checkout, session)
+
+    return {'received': True}
 
 
 @app.post('/v1/validate')

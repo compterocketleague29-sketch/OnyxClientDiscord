@@ -66,6 +66,7 @@ export const licenseKeys = pgTable('license_keys', {
   note: text('note'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   userId: text('userId'),
+  discordUserId: text('discordUserId'),
 })
 
 export type LicenseKey = typeof licenseKeys.$inferSelect

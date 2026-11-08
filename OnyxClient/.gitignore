@@ -19,3 +19,4 @@
 !.env.example
 !**/.env.example
 *.log
+api_url.txt

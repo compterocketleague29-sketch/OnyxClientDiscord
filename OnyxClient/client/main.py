@@ -61,7 +61,19 @@ STALL_STEPS = (
 )
 
 # URL publique de l'API (sans slash final). Surchargeable avec MACRO_API_URL.
-API_URL = os.environ.get('MACRO_API_URL', 'https://onyx-client2.vercel.app').rstrip('/')
+def load_api_url():
+    configured_url = os.environ.get('MACRO_API_URL', '').strip()
+    if configured_url:
+        return configured_url.rstrip('/')
+
+    bundle_dir = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
+    try:
+        return (bundle_dir / 'api_url.txt').read_text(encoding='utf-8').strip().rstrip('/')
+    except FileNotFoundError:
+        return ''
+
+
+API_URL = load_api_url()
 
 
 # Donnees conservees dans le profil Windows (le dossier d'un .exe PyInstaller est temporaire).
@@ -112,6 +124,8 @@ def get_device_id():
 
 
 def validate_key(key):
+    if not API_URL:
+        return False, 'Serveur de licence non configuré. Contactez le support.', None
     try:
         response = requests.post(API_URL + '/v1/validate', json={'key': key, 'device_id': get_device_id()}, timeout=8)
         response.raise_for_status()
